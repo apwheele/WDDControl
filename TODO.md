@@ -14,7 +14,7 @@ The first unchecked item is where to resume.
 - [x] `scripts/06_nocap.py` -- Queens property without the single-place cap
 - [x] `scripts/07_cap_sensitivity.py` -- Queens property with 10% and 5% caps
 - [x] paper.qmd written and rendered (pdf/docx/md); abstract numbers are hard-coded, update if results change
-- [x] private GitHub repo apwheele/WDDControl, pushed for Andrew's review
+- [x] GitHub repo apwheele/WDDControl, public since 2026-10-06 after Andrew's review
 
 ## Design decisions (and why)
 
