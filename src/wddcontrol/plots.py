@@ -142,25 +142,13 @@ def scale_bar(ax, length_ft=5280, label="1 mile", loc=(0.05, 0.05)):
 # Series
 
 
-def smooth_split(y: np.ndarray, n_pre: int, window: int) -> np.ndarray:
-    """Centered rolling mean computed separately before and after the intervention."""
-    s = pd.Series(np.asarray(y, dtype=float))
-    pre = s.iloc[:n_pre].rolling(window, center=True, min_periods=1).mean()
-    post = s.iloc[n_pre:].rolling(window, center=True, min_periods=1).mean()
-    return pd.concat([pre, post]).to_numpy()
-
-
-def monthly_panel(ax, dates, series: dict, n_pre: int, window: int = 3, title=None, ylabel="Crimes per month"):
-    """One line per series: the centered ``window``-month moving average of its monthly counts.
-
-    The average is computed separately before and after the intervention,
-    so it never mixes the two periods.
-    """
+def monthly_panel(ax, dates, series: dict, n_pre: int, title=None, ylabel="Crimes per month"):
+    """One line per series: its monthly counts, with the intervention marked."""
     dates = pd.to_datetime(dates)
     for name, y in series.items():
         col = METHOD_COLOR.get(name, MUTED)
         top = 4 if name == "treated" else 2  # the treated area's line stays on top
-        ax.plot(dates, smooth_split(y, n_pre, window), color=col, lw=2.0,
+        ax.plot(dates, np.asarray(y, dtype=float), color=col, lw=1.4 if name == "treated" else 1.2,
                 label=METHOD_LABEL.get(name, name), zorder=top)
     ax.axvline(dates[n_pre], color=SECONDARY, lw=1, ls=":")
     ax.set_ylim(bottom=0)

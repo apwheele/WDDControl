@@ -618,7 +618,7 @@ plt.show()
 
 ```{python}
 #| label: fig-sim-series
-#| fig-cap: "Monthly crime in the example world's treated area and in four controls, each scaled to the treated area's pre-period volume. Each line is a three-month moving average of monthly counts, computed separately before and after the intervention (dotted line). The treated area's crime falls 20% after the intervention."
+#| fig-cap: "Monthly crime in the example world's treated area and in four controls, each scaled to the treated area's pre-period volume. Lines are monthly counts; the dotted line marks the intervention, after which the treated area's crime falls 20%."
 months = pd.date_range("2020-01-01", periods=ex_counts.shape[1], freq="MS")
 tr = ex_counts[ex_treated].sum(axis=0)
 ser = {"treated": tr}
@@ -788,7 +788,7 @@ plt.show()
 
 ```{python}
 #| label: fig-dallas-series
-#| fig-cap: "Monthly crime in the RedBird PID and three controls: the contiguous control area, the scan's network circle, and microsynth. Each line is a three-month moving average of monthly counts, computed separately before and after January 1, 2026 (dotted line)."
+#| fig-cap: "Monthly crime in the RedBird PID and three controls: the contiguous control area, the scan's network circle, and microsynth. Lines are monthly counts (microsynth's are weighted sums); the dotted line marks January 1, 2026."
 series_figure(dal, dal_months)
 ```
 
@@ -953,7 +953,7 @@ plt.show()
 
 ```{python}
 #| label: fig-nyc-series
-#| fig-cap: "Monthly crime on the Roosevelt Avenue corridor and three controls: the contiguous control area, the scan's network circle, and microsynth. Each line is a three-month moving average of monthly counts, computed separately before and after October 15, 2024 (dotted line)."
+#| fig-cap: "Monthly crime on the Roosevelt Avenue corridor and three controls: the contiguous control area, the scan's network circle, and microsynth. Lines are monthly counts (microsynth's are weighted sums); the dotted line marks October 15, 2024."
 series_figure(nyc, nyc_months)
 ```
 
@@ -1020,8 +1020,6 @@ operation, consistent with the enforcement the city says was already under
 way. Property crime fell right after the launch, from
 `{python} num(prop_before)` complaints in the month before to
 `{python} num(prop_m0)` and `{python} num(prop_m1)` in the first two months.
-(The moving averages are computed separately on each side of the launch, so
-the averages just before it still include the summer peak.)
 
 @tbl-nyc gives the estimates over the 20 months after the launch. Against
 its contiguous control, the WDD for violent crime is
