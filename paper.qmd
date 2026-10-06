@@ -188,11 +188,12 @@ def series_figure(case, n_pre_months, extra=("microsynth",)):
     fig, axes = plt.subplots(2, 1, figsize=(7.5, 5.8), sharex=True)
     for ax, ct in zip(axes, CRIMES):
         m = case[ct]["monthly"]
-        ser = {"treated": m["treated"].to_numpy(), "contiguous": m["contiguous"].to_numpy()}
+        ser = {"treated": m["treated"].to_numpy(), "contiguous": m["contiguous"].to_numpy(),
+               "scan": m["scan"].to_numpy()}
         for e in extra:
             ser[e] = m[e].to_numpy()
         plots.monthly_panel(ax, m["start"], ser, n_pre_months, title=f"{CTYPE_NAME[ct]} crime")
-    axes[0].legend(loc="upper left", ncol=3)
+    axes[0].legend(loc="upper left", ncol=4)
     plt.tight_layout()
     plt.show()
 ```
@@ -617,18 +618,18 @@ plt.show()
 
 ```{python}
 #| label: fig-sim-series
-#| fig-cap: "Monthly crime in the example world's treated area and in three controls, each scaled to the treated area's pre-period volume. Thin lines are monthly counts, thick lines three-month moving averages computed separately before and after the intervention (dotted line). The treated area's crime falls 20% after the intervention."
+#| fig-cap: "Monthly crime in the example world's treated area and in four controls, each scaled to the treated area's pre-period volume. Each line is a three-month moving average of monthly counts, computed separately before and after the intervention (dotted line). The treated area's crime falls 20% after the intervention."
 months = pd.date_range("2020-01-01", periods=ex_counts.shape[1], freq="MS")
 tr = ex_counts[ex_treated].sum(axis=0)
 ser = {"treated": tr}
-for m in ["contiguous", "ring", "microsynth"]:
+for m in ["contiguous", "scan", "ring", "microsynth"]:
     s = ex_sel[m] @ ex_counts
     ser[m] = s * tr[:n_pre].sum() / s[:n_pre].sum()
 fig, ax = plt.subplots(figsize=(7.5, 3.4))
 plots.monthly_panel(ax, months, ser, n_pre)
 ax.set_xticks([])
 ax.set_xlabel("Month")
-ax.legend(loc="upper left", ncol=4)
+ax.legend(loc="upper left", ncol=5)
 plt.tight_layout()
 plt.show()
 ```
@@ -787,7 +788,7 @@ plt.show()
 
 ```{python}
 #| label: fig-dallas-series
-#| fig-cap: "Monthly crime in the RedBird PID, its contiguous control area, and the microsynth control. Thin lines are monthly counts, thick lines three-month moving averages computed separately before and after January 1, 2026 (dotted line)."
+#| fig-cap: "Monthly crime in the RedBird PID and three controls: the contiguous control area, the scan's network circle, and microsynth. Each line is a three-month moving average of monthly counts, computed separately before and after January 1, 2026 (dotted line)."
 series_figure(dal, dal_months)
 ```
 
@@ -819,8 +820,11 @@ city for violent crime and `{python} num(W(dal, "property", "microsynth", "n_uni
 for property crime. @fig-dallas-series shows that the contiguous controls
 track the district's monthly crime from 2019 through 2025, including the
 fall in property crime in 2019 and 2020 and its rise in 2021 and 2022.
-Microsynth's weighted series reproduces the district's monthly counts
-exactly (its line lies under the treated area's before 2026).
+The scan's network circles, which also pass the checks (violations of
+`{python} f"{W(dal, 'violent', 'scan', 'viol'):.2f}"` and
+`{python} f"{W(dal, 'property', 'scan', 'viol'):.2f}"`), track it about as
+closely. Microsynth's weighted series reproduces the district's monthly
+counts exactly (its line lies under the treated area's before 2026).
 
 @tbl-dallas gives the WDD estimates. Violent crime in the district went from
 `{python} num(T(dal, "violent", "T0"))` incidents in the nine months before
@@ -848,6 +852,32 @@ with an interval that just excludes zero: its weighted control fell from
 `{python} num(W(dal, "violent", "microsynth", "C1"))` crimes while the
 contiguous areas rose. Matching every pre-period month exactly, noise
 included, is what the simulations show produces erratic estimates.
+
+```{python}
+#| label: fig-dallas-cumulative
+#| fig-cap: "Running WDD estimate of crimes prevented (negative) or added (positive) in the RedBird PID relative to the scan's network circle, by month since January 1, 2026. The shaded band is the 95% confidence interval of the estimate. The baseline is the nine months before January 2026."
+Bd = 9
+dcum = {}
+fig, axes = plt.subplots(1, 2, figsize=(7.5, 3.3), sharex=True)
+for ax, ct in zip(axes, CRIMES):
+    m = dal[ct]["monthly"]
+    pre, post = m[(m["month"] < 0) & (m["month"] >= -Bd)], m[m["month"] >= 0]
+    dcum[ct] = cumulative_wdd(pre["treated"], pre["scan"], post["treated"], post["scan"])
+    plots.cumulative_panel(ax, dcum[ct]["m"], dcum[ct], color=plots.AQUA, title=f"{CTYPE_NAME[ct]} crime")
+axes[1].set_ylabel("")
+plt.tight_layout()
+plt.show()
+dv, dp = dcum["violent"], dcum["property"]
+```
+
+The running WDD works with any control area. @fig-dallas-cumulative tracks
+the district month by month against the scan's network circle. Violent
+crime never strays more than
+`{python} num(np.abs(dv["est"]).max())` crimes from its control's path and
+ends at `{python} signed(dv["est"][-1])`; property crime moves between
+`{python} signed(dp["est"].min())` and `{python} signed(dp["est"].max())`
+and ends at `{python} signed(dp["est"][-1])`. Neither interval excludes zero
+in any month, the same answer as the contiguous control in @tbl-dallas.
 
 # Case study 2: Operation Restore Roosevelt, Queens {#sec-nyc}
 
@@ -923,7 +953,7 @@ plt.show()
 
 ```{python}
 #| label: fig-nyc-series
-#| fig-cap: "Monthly crime on the Roosevelt Avenue corridor, its contiguous control area, and the microsynth control. Thin lines are monthly counts, thick lines three-month moving averages computed separately before and after October 15, 2024 (dotted line)."
+#| fig-cap: "Monthly crime on the Roosevelt Avenue corridor and three controls: the contiguous control area, the scan's network circle, and microsynth. Each line is a three-month moving average of monthly counts, computed separately before and after October 15, 2024 (dotted line)."
 series_figure(nyc, nyc_months)
 ```
 
@@ -979,7 +1009,10 @@ the corridor tripled over the matching period, from
 `{python} num(nyc_viol_first)` complaints in its first year to
 `{python} num(nyc_viol_last)` in the year before the operation, and its
 contiguous control followed the same rise. Property crime surged in 2021 and
-2022, and its control follows that too. The timing around the launch
+2022, and its control follows that too; the scan's network circle for
+property crime, which fails the checks (violation
+`{python} f"{W(nyc, 'property', 'scan', 'viol'):.2f}"`), visibly departs from
+the corridor in 2022 and 2023. The timing around the launch
 differs by crime type. Violent crime on the corridor peaked in the month
 starting `{python} viol_peak_date` (`{python} num(viol_peak)` complaints) and
 had already fallen to `{python} num(viol_before)` in the month before the

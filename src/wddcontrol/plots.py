@@ -151,13 +151,16 @@ def smooth_split(y: np.ndarray, n_pre: int, window: int) -> np.ndarray:
 
 
 def monthly_panel(ax, dates, series: dict, n_pre: int, window: int = 3, title=None, ylabel="Crimes per month"):
-    """Monthly counts (thin) and a centered rolling mean (thick) for each series."""
+    """One line per series: the centered ``window``-month moving average of its monthly counts.
+
+    The average is computed separately before and after the intervention,
+    so it never mixes the two periods.
+    """
     dates = pd.to_datetime(dates)
     for name, y in series.items():
         col = METHOD_COLOR.get(name, MUTED)
-        top = 4 if name == "treated" else 2  # the treated area's lines stay on top
-        ax.plot(dates, y, color=col, lw=0.7, alpha=0.35, zorder=top - 1)
-        ax.plot(dates, smooth_split(y, n_pre, window), color=col, lw=2.0 if name == "treated" else 1.8,
+        top = 4 if name == "treated" else 2  # the treated area's line stays on top
+        ax.plot(dates, smooth_split(y, n_pre, window), color=col, lw=2.0,
                 label=METHOD_LABEL.get(name, name), zorder=top)
     ax.axvline(dates[n_pre], color=SECONDARY, lw=1, ls=":")
     ax.set_ylim(bottom=0)
