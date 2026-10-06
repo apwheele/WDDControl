@@ -18,6 +18,10 @@ Two scenarios differ in how local trends are:
 - ``"local"``: the trend adds a short-range field (a few cells across), so
   adjacent places can follow different paths, and the treated hot spot is
   chosen among those where crime was rising, as interventions often are.
+
+With ``coarse = f`` the world is simulated on the fine grid and then each f x f
+block of cells is summed into one coarse cell (the treated block and buffer
+are aligned to the coarse cells), giving fewer, larger units of analysis.
 """
 
 from __future__ import annotations
@@ -68,7 +72,7 @@ def simulate(rng: np.random.Generator, scenario: str = "smooth", nr: int = 40, n
              n_post: int = 12, block: int = 4, buffer: int = 2, effect: float = -0.2, mu: float = -1.0,
              sd_level: float = 1.0, sd_trend: float = 0.08, sd_local: float = 0.12, sd_bump: float = 0.25,
              sd_cell: float = 0.3, season: float = 0.15, shape: float = 10.0, hot_quantile: float = 0.9,
-             rising_quantile: float = 0.75) -> World:
+             rising_quantile: float = 0.75, coarse: int = 1) -> World:
     """One synthetic world with a ``block`` x ``block`` treated hot spot.
 
     The treated block is drawn at random among blocks whose expected
@@ -98,6 +102,9 @@ def simulate(rng: np.random.Generator, scenario: str = "smooth", nr: int = 40, n
     win = np.lib.stride_tricks.sliding_window_view(pre_tot, (block, block)).sum(axis=(2, 3))
     ok = np.zeros_like(win, dtype=bool)
     ok[edge:nr - block - edge + 1, edge:nc - block - edge + 1] = True
+    if coarse > 1:  # align the treated block to the coarse cells
+        ok[np.arange(ok.shape[0]) % coarse != 0, :] = False
+        ok[:, np.arange(ok.shape[1]) % coarse != 0] = False
     hot = ok & (win >= np.quantile(win[ok], hot_quantile))
     if scenario == "local":
         # rising relative to its surroundings: high short-range trend component
@@ -115,9 +122,24 @@ def simulate(rng: np.random.Generator, scenario: str = "smooth", nr: int = 40, n
     mult[np.ix_(treated, np.arange(n_pre, T))] = 1 + effect
     noise = rng.gamma(shape, 1 / shape, size=(n, T))
     counts = rng.poisson(lam * mult * noise)
+    if coarse > 1:
+        f = coarse
+        cr, cc_ = nr // f, nc // f
+        key = (rr // f) * cc_ + (cc // f)
+        agg = sparse.csr_matrix((np.ones(n), (key, np.arange(n))), shape=(cr * cc_, n))
+        lam, counts = agg @ lam, np.asarray(agg @ counts).astype(np.int64)
+        treated = np.asarray(agg @ treated.astype(float)).ravel() > 0
+        excluded = np.asarray(agg @ excluded.astype(float)).ravel() > 0
+        nr, nc = cr, cc_
     adj, xy = grid_adjacency(nr, nc)
     return World(nr=nr, nc=nc, lam=lam, counts=counts, treated=treated, excluded=excluded, n_pre=n_pre,
                  n_post=n_post, effect=effect, xy=xy, adj=adj)
+
+
+def grid_edge(nr: int, nc: int) -> np.ndarray:
+    """Cells on the grid's outer edge."""
+    rr, cc = np.divmod(np.arange(nr * nc), nc)
+    return (rr == 0) | (rr == nr - 1) | (cc == 0) | (cc == nc - 1)
 
 
 def aggregate(counts: np.ndarray, months: int) -> np.ndarray:

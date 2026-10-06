@@ -90,17 +90,20 @@ def grid_panel(ax, nr, nc, base, treated, excluded, sel=None, weights=None, titl
 
 
 def case_map(ax, units, areas, selections: dict, extent=None, excluded_geoms=None, title=None, pad=1500.0,
-             weights=None):
+             weights=None, outlines: dict | None = None):
     """Census blocks around the treated area, with control areas filled.
 
-    ``selections`` maps a label to (unit index array, color). ``areas`` is a
+    ``selections`` maps a label to (unit index array, color), drawn filled;
+    ``outlines`` the same, drawn as the area's outline. ``areas`` is a
     GeoDataFrame with ``part`` = treated / buffer. ``weights`` (unit index,
     weight) shades microsynth weights instead.
     """
+    outlines = outlines or {}
     treated = areas.loc[areas["part"] == "treated"]
     buffer = areas.loc[areas["part"] == "buffer"]
     if extent is None:
-        geoms = [buffer.geometry.union_all()] + [units.geometry.iloc[idx].union_all() for idx, _ in selections.values()]
+        geoms = [buffer.geometry.union_all()] + [units.geometry.iloc[idx].union_all()
+                                                 for idx, _ in list(selections.values()) + list(outlines.values())]
         b = np.array([g.bounds for g in geoms])
         extent = (b[:, 0].min() - pad, b[:, 1].min() - pad, b[:, 2].max() + pad, b[:, 3].max() + pad)
     x0, y0, x1, y1 = extent
@@ -114,7 +117,10 @@ def case_map(ax, units, areas, selections: dict, extent=None, excluded_geoms=Non
         g = g.cx[x0:x1, y0:y1]
         g.plot(ax=ax, column="w", cmap=ORANGES, linewidth=0, vmin=0, vmax=w.max())
     for label, (idx, color) in selections.items():
-        units.iloc[idx].plot(ax=ax, facecolor=color, edgecolor="white", linewidth=0.2, alpha=0.9)
+        units.iloc[idx].plot(ax=ax, facecolor=color, edgecolor=color, linewidth=0.2, alpha=0.9)
+    for label, (idx, color) in outlines.items():
+        shape = gpd.GeoSeries([units.geometry.iloc[idx].buffer(1.0).union_all().buffer(-1.0)], crs=units.crs)
+        shape.boundary.plot(ax=ax, color=color, linewidth=1.8)
     buffer.boundary.plot(ax=ax, color=INK, linestyle="--", linewidth=0.8)
     treated.plot(ax=ax, facecolor=INK, edgecolor=INK, alpha=0.85)
     ax.set_xlim(x0, x1)
@@ -144,7 +150,7 @@ def smooth_split(y: np.ndarray, n_pre: int, window: int) -> np.ndarray:
     return pd.concat([pre, post]).to_numpy()
 
 
-def monthly_panel(ax, dates, series: dict, n_pre: int, window: int = 6, title=None, ylabel="Crimes per month"):
+def monthly_panel(ax, dates, series: dict, n_pre: int, window: int = 3, title=None, ylabel="Crimes per month"):
     """Monthly counts (thin) and a centered rolling mean (thick) for each series."""
     dates = pd.to_datetime(dates)
     for name, y in series.items():
@@ -160,11 +166,10 @@ def monthly_panel(ax, dates, series: dict, n_pre: int, window: int = 6, title=No
         ax.set_title(title)
 
 
-def cumulative_panel(ax, months, lines: dict, title=None):
-    """Running WDD estimates with 95% bands; ``lines`` maps a label to (dict from cumulative_wdd, color)."""
-    for label, (r, color) in lines.items():
-        ax.fill_between(months, r["low"], r["high"], color=color, alpha=0.15, lw=0)
-        ax.plot(months, r["est"], color=color, lw=2, label=label)
+def cumulative_panel(ax, months, r: dict, color=BLUE, title=None):
+    """Running WDD estimate (dict from cumulative_wdd) with its 95% band."""
+    ax.fill_between(months, r["low"], r["high"], color=color, alpha=0.2, lw=0)
+    ax.plot(months, r["est"], color=color, lw=2)
     ax.axhline(0, color=SECONDARY, lw=1)
     ax.set_xlabel("Months since the intervention")
     ax.set_ylabel("Cumulative crimes prevented (-)\nor added (+)")
@@ -180,6 +185,8 @@ def legend_handles(items):
             out.append(Patch(facecolor=color, edgecolor="none", label=label))
         elif kind == "outline":
             out.append(Patch(facecolor="none", edgecolor=color, linestyle="--", label=label))
+        elif kind == "edge":
+            out.append(Patch(facecolor="none", edgecolor=color, linewidth=1.8, label=label))
         elif kind == "hatch":
             out.append(Patch(facecolor="none", edgecolor=color, hatch="////", label=label))
         else:

@@ -29,6 +29,34 @@ def test_search_returns_connected_area_outside_buffer():
     assert np.isclose(res.best.viol, res.criteria.violation(series))
 
 
+def test_no_holes():
+    w = sim.simulate(np.random.default_rng(4), nr=24, nc=24, scenario="smooth")
+    X = w.counts[:, :w.n_pre]
+    y = X[w.treated].sum(axis=0)
+    g = contig.distance_graph(w.adj, w.xy)
+    rr, cc = np.divmod(np.arange(w.nr * w.nc), w.nc)
+    edge = (rr == 0) | (rr == w.nr - 1) | (cc == 0) | (cc == w.nc - 1)
+    dist = np.hypot(rr - rr[w.treated].mean(), cc - cc[w.treated].mean())
+    res = contig.search(X, y, g, ~w.excluded, top=5, time_limit=1, refine=1, refine_time=2,
+                        dist_to_treated=dist, edge=edge)
+    allowed = ~w.excluded
+    for s in [res.best, res.scan] + res.ilp:
+        filled, left = contig.fill_holes(s.nodes, w.adj, edge, allowed)
+        assert len(filled) == len(s.nodes) and left == 0
+
+
+def test_fill_holes_on_grid():
+    adj, _ = sim.grid_adjacency(5, 5)
+    ring = [6, 7, 8, 11, 13, 16, 17, 18]  # the 3 x 3 square around cell 12, minus its middle
+    edge = np.zeros(25, dtype=bool)
+    filled, left = contig.fill_holes(np.array(ring), adj, edge, np.ones(25, dtype=bool))
+    assert 12 in filled and left == 0
+    blocked = np.ones(25, dtype=bool)
+    blocked[12] = False
+    filled, left = contig.fill_holes(np.array(ring), adj, edge, blocked)
+    assert 12 not in filled and left == 1
+
+
 def test_ordering_constraint_window_solution_is_connected():
     adj, xy = sim.grid_adjacency(10, 10)
     g = contig.distance_graph(adj, xy)

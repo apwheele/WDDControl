@@ -8,7 +8,9 @@ trend, within what Poisson noise allows. The search is a network scan over
 every possible center combined with a small integer program inside each
 scan window; a constraint that each selected unit borders a selected unit
 closer to the window's center keeps the area connected and compact, and
-keeps each program small enough to solve in about a second.
+keeps each program small enough to solve in about a second. Control areas
+have no holes: the program forbids one-unit holes and any larger enclosed
+pocket is filled before an area is checked and ranked.
 
 The paper is `paper.pdf` (also built as `paper.docx` and `paper.md`), built
 from `paper.qmd` and `references.bib`. It compares the method with common

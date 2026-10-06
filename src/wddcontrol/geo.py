@@ -67,6 +67,13 @@ def adjacency(units: gpd.GeoDataFrame, tol: float = 1.0, min_shared: float = 20.
     return mat
 
 
+def edge_units(units: gpd.GeoDataFrame, tol: float = 1.0) -> np.ndarray:
+    """Units touching the boundary of the region they cover (outer edge, water, enclaves)."""
+    region = shapely.union_all(units.geometry.values)
+    line = shapely.buffer(shapely.boundary(region), tol)
+    return shapely.intersects(units.geometry.values, line)
+
+
 def assign_points(crime: pd.DataFrame, units: gpd.GeoDataFrame, max_dist: float = 300.0) -> np.ndarray:
     """Index of the unit containing each incident (nearest within ``max_dist`` if on no unit), -1 if none."""
     pts = gpd.GeoDataFrame(geometry=gpd.points_from_xy(crime["lon"], crime["lat"]), crs=4326).to_crs(units.crs)

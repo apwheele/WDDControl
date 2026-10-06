@@ -3,7 +3,8 @@
 Each replication draws a 40 x 40 grid world (sim.simulate) with a 4 x 4
 treated hot spot, a 2-cell exclusion buffer, 60 pre-period months and 12 post
 months, and a 20% reduction in the treated cells after the intervention, in
-one of two scenarios ("smooth" or "local" trends). Control areas are chosen
+one of two scenarios ("smooth" or "local" trends), and sums it into a 20 x 20
+grid of coarse cells (2 x 2 treated, 1-cell buffer). Control areas are chosen
 from the 60 pre-period months; the WDD compares the last 12 pre months with
 the 12 post months.
 
@@ -28,11 +29,12 @@ out = root / "results" / "sim" / "rows"
 out.mkdir(parents=True, exist_ok=True)
 EXAMPLE_SEED = 0
 TOP, TIME_LIMIT = 20, 1.0
+COARSE = 2
 
 
 def run(scenario: str, seed: int, save_example: bool = False) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    w = sim.simulate(rng, scenario=scenario)
+    w = sim.simulate(rng, scenario=scenario, coarse=COARSE)
     n = w.nr * w.nc
     X = w.counts[:, :w.n_pre]
     y = X[w.treated].sum(axis=0)
@@ -77,12 +79,12 @@ def run(scenario: str, seed: int, save_example: bool = False) -> pd.DataFrame:
                      "fit": float(crit.fit(series / k)), "viol": float(crit.violation(series / k)),
                      "cells": size, "dist": d, "seconds": secs, "T0": T0, "T1": T1})
 
-    add("ring", cand & (cheb >= 3) & (cheb <= 4))
+    add("ring", cand & (cheb == 2))  # the band of cells just outside the one-cell buffer
     add("city", cand.copy())
     for obj in ["near", "fit"]:
         t = time.perf_counter()
         res = contig.search(X, y, g, cand, objective=obj, top=TOP, time_limit=TIME_LIMIT, refine=1,
-                            refine_time=2 * TIME_LIMIT, dist_to_treated=dist)
+                            refine_time=2 * TIME_LIMIT, dist_to_treated=dist, edge=sim.grid_edge(w.nr, w.nc))
         secs = time.perf_counter() - t
         sels = [("scan", res.scan), ("contiguous", res.best)] if obj == "near" else [("best fit", res.best)]
         for name, s in sels:

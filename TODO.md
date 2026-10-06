@@ -38,5 +38,17 @@ The first unchecked item is where to resume.
   with the intercept (sum w = n_treated) exact calibration is infeasible in
   Queens and the sims, so it falls back to outcomes only.
 - Case-study centers thinned to one per 800 ft cell (speed).
+- No holes (Andrew's request after first review): ILP rows forbid one-unit
+  holes (z_i >= sum of neighbors - (deg - 1)) and enclosing an ineligible
+  unit; larger enclosed pockets of candidate units are filled
+  (contig.fill_holes) and areas are ranked on filled versions. Units on
+  the region edge (geo.edge_units) cannot be enclosed.
+- Synthetic worlds are simulated on 40x40 and analyzed on 20x20 coarse
+  cells (Andrew asked for coarser units); 2x2 treated, 1-cell buffer.
+- Roosevelt date checked against the Oct 15, 2024 NYC press release; the
+  corridor's violent crime peaked June-July 2024 and fell before launch
+  (city says enforcement was ongoing over the prior year).
+- Cumulative chart shows only the contiguous-control running WDD with its
+  95% band (Andrew: one error area, not two).
 - ILP time limits make reruns slightly machine dependent.
 - Dropbox syncing .venv slowed runs; Andrew paused Dropbox 2026-10-06.

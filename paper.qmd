@@ -17,19 +17,19 @@ abstract: |
   blocks, with a constraint that each selected block border one closer to
   the window's center guaranteeing a connected, compact area; the nearest
   passing area is chosen. Searches take two to four minutes for a large
-  city. In simulations, asking for the best possible pre-period fit, as the
-  best-fitting area and microsynth's exact calibration do, chases noise and
-  gives poor estimates. When the treated area's crime was rising relative
-  to its surroundings, a surrounding ring and the city-wide trend miss most
-  of the effect, while the matched contiguous area cuts that bias roughly in
-  half; when neighborhoods share trends, a ring does as well or better. Applied
-  to a new public improvement district in Dallas, Texas, the method finds no
-  detectable change in its first nine months. For Operation Restore
-  Roosevelt in Queens, New York, a running month-by-month WDD shows property
-  crime 22% below the nearest matched control after 20 months, but other,
-  equally well-matched control areas give estimates ranging from large
-  reductions to increases, so the data do not pin down the operation's
-  effect. Code, data, and paper source are at
+  city. In simulations where the treated area's crime was rising relative
+  to its surroundings, a surrounding ring and the city-wide trend miss about
+  70% of the effect, while the matched contiguous area misses about 20%;
+  asking for the best possible pre-period fit, as the best-fitting area and
+  microsynth's exact calibration do, chases noise and does worse. When
+  neighborhoods share trends, a ring does as well. Applied to a new public
+  improvement district in Dallas, Texas, the method finds no detectable
+  change in its first nine months. For Operation Restore Roosevelt in
+  Queens, New York, a running month-by-month WDD shows property crime
+  falling relative to the matched control during the operation's first nine
+  months and then rebounding, with no net change after 20 months, and
+  equally well-matched alternative controls disagree, so the data do not pin
+  down the operation's effect. Code, data, and paper source are at
   https://github.com/apwheele/WDDControl.
 bibliography: references.bib
 link-citations: true
@@ -455,15 +455,27 @@ the best solution found is used; because the final choice is the nearest
 window holding a passing area, it rarely depends on how far the solver got
 within a window.)
 
+*No holes.* A control area should be a single area an analyst can outline,
+with no unselected pockets inside it. Two more sets of linear constraints
+rule out the simplest holes: a unit whose neighbors all lie in the window
+must be selected if all of them are, $z_i \ge \sum_{j \in N(i)} z_j -
+(\text{deg}_i - 1)$, and a unit that cannot be selected (in the buffer, or
+excluded) must not be completely surrounded, $\sum_{j \in N(u)} z_j \le
+\text{deg}_u - 1$. Units on the edge of the study region are exempt, since
+they cannot be enclosed. Any larger pocket of eligible units that is still
+enclosed after solving is added to the area, the filled area is checked
+again, and areas are ranked by their filled versions, so every area the
+search reports, including the scan's network circles, has no holes.
+
 *Shape refinement.* Minimizing distance alone selects the units it needs
-and connects them with as few others as possible, which can leave holes and
-thin tendrils. For the eight best passing areas the program is solved again
-with the area's perimeter added to the objective, counted as adjacencies
-between a selected and an unselected unit,
+and connects them with as few others as possible, which can leave thin
+tendrils. For the eight best passing areas the program is solved again with
+the area's perimeter added to the objective, counted as adjacencies between
+a selected and an unselected unit,
 $\sum_i \text{deg}_i z_i - 2 \sum_{(i,j)} w_{ij}$ with $w_{ij} \le z_i$ and
 $w_{ij} \le z_j$ for each adjacent pair, warm-started from the first
-solution and allowed ten seconds. That fills holes and trims tendrils
-whenever doing so keeps the area passing.
+solution and allowed ten seconds. That trims tendrils and rounds out the
+boundary whenever doing so keeps the area passing.
 
 *One place should not be the control.* A census block holding a big-box
 store or a large apartment complex can carry a large share of an area's
@@ -543,48 +555,54 @@ ex_rows = pd.read_csv(R / "sim" / "rows" / "local_0000.csv").set_index("method")
 
 ## Design
 
-Each synthetic world is a `{python} nr` by `{python} nc` grid of cells with
-`{python} n_pre` months before an intervention and 12 after. A cell's
-expected monthly count is
+Each synthetic world is simulated on a 40 by 40 grid of fine cells with
+`{python} n_pre` months before an intervention and 12 after, and analyzed on
+a `{python} nr` by `{python} nc` grid of coarse cells, each summing a 2 by 2
+block of fine cells. A fine cell's expected monthly count is
 $\lambda_{it} = \exp(\mu + a_i + b_i t/12 + c_i g(t) + s(t))$, where $a_i$
 is a spatially smooth level (a Gaussian random field plus cell-level noise),
 $b_i$ a spatially smooth yearly trend, $c_i g(t)$ a temporary rise or fall
 peaking mid pre-period with a smooth field $c_i$, and $s(t)$ a common
 seasonal cycle. Counts are Poisson with gamma-distributed overdispersion.
-The treated area is a 4 by 4 block of cells drawn among the hottest 10% of
-such blocks, as interventions target hot spots, with cells within two cells
-of it excluded as a buffer. After the intervention its crime falls by 20%.
+The treated area is a 4 by 4 block of fine cells (2 by 2 coarse cells)
+drawn among the hottest 10% of such blocks, as interventions target hot
+spots, and the ring of coarse cells around it is excluded as a buffer. After the intervention its crime falls by 20%.
 The WDD compares the last 12 pre-period months with the 12 post-period
 months, and its target is the expected number of crimes prevented,
 $-0.2$ times the treated area's expected post-period crime.
 
 Two scenarios differ in how local the trends are. In the *smooth* scenario
-the trend field varies only over long distances (about six cells), so the
-treated hot spot's neighbors share its trend. In the *local* scenario the
-trend adds a short-range field (about one or two cells), and the treated
+the trend field varies only over long distances (about three coarse cells),
+so the treated hot spot's neighbors share its trend. In the *local* scenario
+the trend adds a short-range field (about one coarse cell), and the treated
 hot spot is drawn from the quarter of hot spots whose short-range trend is
 highest: crime there was rising relative to its surroundings, as it often
 is where interventions are placed. I draw `{python} int(n_rep["smooth"])` worlds
 in each scenario. To keep the simulations quick, every cell with crime is a
 scan center, the integer program runs in the best 20 windows with a
 one-second limit, and only the chosen area's shape is refined; there is no
-single-place cap, since no synthetic cell carries a store.
+single-place cap, since no synthetic cell carries a store. The ring is the
+band of coarse cells just outside the buffer.
 
 ## An example
 
 @fig-sim-map shows one world from the local scenario and the control areas
-each method chooses. The ring hugs the buffer. The contiguous control is a
-compact area just outside the buffer that passes all four checks. The scan's
-network circle is nearby. The best-fitting area sprawls, and microsynth
-spreads its weight over `{python} num(ex_rows.loc["microsynth", "cells"])`
-cells across the whole grid. @fig-sim-series shows why the ring fails in
-this world: the treated area's crime was rising before the intervention and
-the ring's was not, while the contiguous control follows the treated
-series.
+each method chooses. The ring surrounds the buffer. The contiguous control is
+a compact area of `{python} num(ex_rows.loc["contiguous", "cells"])` cells
+just outside the buffer, and the scan's network circle is next to it. The
+best-fitting area sprawls across `{python} num(ex_rows.loc["best fit", "cells"])`
+cells, and microsynth spreads its weight over
+`{python} num(ex_rows.loc["microsynth", "cells"])` cells across the whole
+grid. @fig-sim-series shows the monthly series. In this world the true
+effect is `{python} num(ex_rows.loc["contiguous", "truth"])` crimes; the
+part of the WDD error due to non-parallel expected trends is
+`{python} signed(ex_rows.loc["contiguous", "trend_err"])` for the
+contiguous control and `{python} signed(ex_rows.loc["ring", "trend_err"])`
+for the ring.
 
 ```{python}
 #| label: fig-sim-map
-#| fig-cap: "One synthetic world (local scenario). Gray shading is expected pre-period crime (darker is more); the solid square is the treated area and the dashed square the excluded buffer. Filled cells are each method's control area; the last panel shades microsynth's weights."
+#| fig-cap: "One synthetic world (local scenario), on its 20 by 20 grid of coarse cells. Gray shading is expected pre-period crime (darker is more); the solid square is the treated area and the dashed square the excluded buffer. Filled cells are each method's control area; the last panel shades microsynth's weights."
 base = ex["lam"][:, :n_pre].mean(axis=1)
 fig, axes = plt.subplots(2, 3, figsize=(7.5, 5.4))
 panels = [("Expected crime", None, None), ("Ring", "ring", None), ("Contiguous control", "contiguous", None),
@@ -599,7 +617,7 @@ plt.show()
 
 ```{python}
 #| label: fig-sim-series
-#| fig-cap: "Monthly crime in the example world's treated area and in three controls, each scaled to the treated area's pre-period volume. Thin lines are monthly counts, thick lines six-month moving averages computed separately before and after the intervention (dotted line). The treated area's crime falls 20% after the intervention."
+#| fig-cap: "Monthly crime in the example world's treated area and in three controls, each scaled to the treated area's pre-period volume. Thin lines are monthly counts, thick lines three-month moving averages computed separately before and after the intervention (dotted line). The treated area's crime falls 20% after the intervention."
 months = pd.date_range("2020-01-01", periods=ex_counts.shape[1], freq="MS")
 tr = ex_counts[ex_treated].sum(axis=0)
 ser = {"treated": tr}
@@ -641,8 +659,7 @@ and the trend errors of the ring, the scan, the best fit, and the contiguous
 control are all small (trend RMSE
 `{python} f"{min(S('smooth', m, 'trend_rmse') for m in ['ring', 'scan', 'best fit', 'contiguous']):.0f}"`
 to
-`{python} f"{max(S('smooth', m, 'trend_rmse') for m in ['ring', 'scan', 'best fit', 'contiguous']):.0f}"`,
-smallest for the contiguous control). The contiguous
+`{python} f"{max(S('smooth', m, 'trend_rmse') for m in ['ring', 'scan', 'best fit', 'contiguous']):.0f}"`). The contiguous
 control is essentially unbiased
 (`{python} signed(S("smooth", "contiguous", "bias"))`). The ring has the
 smallest overall error (RMSE `{python} f"{S('smooth', 'ring', 'rmse'):.0f}"`
@@ -651,7 +668,7 @@ contiguous control), because it holds several times the treated area's crime
 and scaling it down shrinks its noise. The city-wide trend misses local
 trends, and microsynth is the least accurate control
 (RMSE `{python} f"{S('smooth', 'microsynth', 'rmse'):.0f}"`) even though it
-matches every pre-period month exactly.
+matches the pre-period months exactly whenever that is feasible.
 
 The local scenario is the one matching is for. The treated hot spot's crime
 was rising relative to its surroundings, so the ring and the city-wide trend
@@ -679,7 +696,10 @@ from requiring the pre-period match and taking the nearest area that meets
 it, while the integer program finds a passing area more often
 (`{python} pct(S("local", "contiguous", "passes"))` of local worlds against
 `{python} pct(S("local", "scan", "passes"))` for the scan) and controls its
-shape. Second, no control's 95% interval reaches its nominal coverage. The
+shape. Second, the WDD's intervals cover the true effect about as often as
+they should for the contiguous control in the smooth scenario
+(`{python} pct(S("smooth", "contiguous", "cover"))`), but in the local
+scenario no control's 95% interval reaches its nominal coverage. The
 Poisson standard error ignores both overdispersion and the uncertainty in
 the control's trend; inflating it by $\sqrt{\phi}$ helps
 (`{python} pct(S("local", "contiguous", "cover"))` to
@@ -740,31 +760,34 @@ months after January 1, 2026 with the nine months before.
 
 ```{python}
 #| label: fig-dallas-map
-#| fig-cap: "The RedBird PID (black), its quarter-mile buffer (dashed), and the contiguous control area for violent and property crime (blue). Hatched areas are other public improvement districts, excluded from the control pool. Gray lines are census blocks. The right panel shows microsynth's weights for violent crime across the whole city (darker is larger)."
+#| fig-cap: "The RedBird PID (black), its quarter-mile buffer (dashed), and the control areas for violent and property crime: the contiguous control (blue fill) and the pure scan's network circle (aqua outline). Hatched areas are other public improvement districts, excluded from the control pool. Gray lines are census blocks. The right panel shows microsynth's weights for violent crime across the whole city (darker is larger)."
 fig, axes = plt.subplots(1, 3, figsize=(7.5, 3.6), gridspec_kw={"width_ratios": [1, 1, 1.15]})
 sels = {ct: sel_idx("dallas", dal, ct) for ct in CRIMES}
-allidx = np.concatenate(list(sels.values()))
+scans = {ct: sel_idx("dallas", dal, ct, "scan") for ct in CRIMES}
+allidx = np.concatenate(list(sels.values()) + list(scans.values()))
 b = np.array([dal["areas"].total_bounds, units["dallas"].iloc[allidx].total_bounds])
 pad = 2500
 ext = (b[:, 0].min() - pad, b[:, 1].min() - pad, b[:, 2].max() + pad, b[:, 3].max() + pad)
 for ax, ct in zip(axes[:2], CRIMES):
     plots.case_map(ax, units["dallas"], dal["areas"], {"c": (sels[ct], plots.BLUE)}, extent=ext,
-                   excluded_geoms=other_pids, title=f"{CTYPE_NAME[ct]} crime")
+                   excluded_geoms=other_pids, title=f"{CTYPE_NAME[ct]} crime",
+                   outlines={"s": (scans[ct], plots.AQUA)})
 plots.scale_bar(axes[0])
 ms = dal["violent"]["ms"]
 city_ext = tuple(units["dallas"].total_bounds)
 plots.case_map(axes[2], units["dallas"], dal["areas"], {}, extent=city_ext,
                weights=(g2i["dallas"][ms["GEOID20"]].to_numpy(), ms["weight"].to_numpy()), title="Microsynth weights")
 fig.legend(handles=plots.legend_handles([("RedBird PID", plots.INK, "patch"), ("Quarter-mile buffer", plots.INK, "outline"),
-                                         ("Contiguous control", plots.BLUE, "patch"), ("Other PIDs", plots.MUTED, "hatch")]),
-           loc="lower center", ncol=4, frameon=False)
+                                         ("Contiguous control", plots.BLUE, "patch"), ("Scan", plots.AQUA, "edge"),
+                                         ("Other PIDs", plots.MUTED, "hatch")]),
+           loc="lower center", ncol=5, frameon=False, fontsize=8)
 plt.tight_layout(rect=(0, 0.07, 1, 1))
 plt.show()
 ```
 
 ```{python}
 #| label: fig-dallas-series
-#| fig-cap: "Monthly crime in the RedBird PID, its contiguous control area, and the microsynth control. Thin lines are monthly counts, thick lines six-month moving averages computed separately before and after January 1, 2026 (dotted line)."
+#| fig-cap: "Monthly crime in the RedBird PID, its contiguous control area, and the microsynth control. Thin lines are monthly counts, thick lines three-month moving averages computed separately before and after January 1, 2026 (dotted line)."
 series_figure(dal, dal_months)
 ```
 
@@ -789,7 +812,8 @@ miles) south of the district, across Interstate 20; for property crime,
 (`{python} f"{W(dal, 'property', 'contiguous', 'area_sqmi'):.1f}"` square
 miles) north of it. Both are larger than the half-square-mile district,
 because the former mall has more crime per square mile than the
-neighborhoods around it. Microsynth, by contrast, puts weight on
+neighborhoods around it. The scan's network circles cover much of the same
+ground but are larger. Microsynth, by contrast, puts weight on
 `{python} num(W(dal, "violent", "microsynth", "n_units"))` blocks across the
 city for violent crime and `{python} num(W(dal, "property", "microsynth", "n_units"))`
 for property crime. @fig-dallas-series shows that the contiguous controls
@@ -837,6 +861,14 @@ nyc_alt = {ct: nyc[ct]["alt"] for ct in CRIMES}
 _mv = nyc["violent"]["monthly"]
 nyc_viol_first = _mv.loc[_mv["month"] // 12 == -6, "treated"].sum()  # Oct 2018 - Sep 2019
 nyc_viol_last = _mv.loc[_mv["month"] // 12 == -1, "treated"].sum()  # Oct 2023 - Sep 2024
+_v = nyc["violent"]["monthly"].set_index("month")
+_p = nyc["property"]["monthly"].set_index("month")
+viol_peak_m = int(_v.loc[-12:-1, "treated"].idxmax())
+viol_peak = _v.loc[viol_peak_m, "treated"]
+_d = _v.loc[viol_peak_m, "start"]
+viol_peak_date = f"{_d:%B} {_d.day}, {_d.year}"
+viol_before = _v.loc[-1, "treated"]
+prop_before, prop_m0, prop_m1 = _p.loc[-1, "treated"], _p.loc[0, "treated"], _p.loc[1, "treated"]
 ```
 
 Operation Restore Roosevelt began on October 15, 2024: a 90-day,
@@ -844,9 +876,13 @@ multi-agency enforcement push by the New York Police Department, with state
 troopers, on Roosevelt Avenue from 74th Street to 111th Street in Jackson
 Heights, Elmhurst, and Corona, Queens, aimed at brothels, illegal street
 vending, retail theft and the sale of stolen goods, and unlicensed vehicles
-[@queenseagle2024]. It was extended after the first 90 days. In January
-2025 the police commissioner credited it with a 25% reduction in crime in
-the area [@qns2025].
+[@queenseagle2024; @nyc2024roosevelt]. The city's announcement also notes
+that over the preceding year the police had already been addressing
+prostitution, unlicensed vending, and retail theft on the corridor
+[@nyc2024roosevelt], so the operation intensified enforcement that had been
+building. It was extended after the first 90 days. In January 2025 the
+police commissioner credited it with a 25% reduction in crime in the area
+[@qns2025].
 
 I use NYPD complaint records for Queens from the city's open data portal
 (the historic file through 2025 and the year-to-date file through June
@@ -865,27 +901,29 @@ months after the launch, through June 14, 2026, with the 20 months before.
 
 ```{python}
 #| label: fig-nyc-map
-#| fig-cap: "Roosevelt Avenue from 74th to 111th Street (black), its quarter-mile buffer (dashed), and the contiguous control areas for violent and property crime (blue). Gray lines are census blocks."
+#| fig-cap: "Roosevelt Avenue from 74th to 111th Street (black), its quarter-mile buffer (dashed), and the control areas for violent and property crime: the contiguous control (blue fill) and the pure scan's network circle (aqua outline). Gray lines are census blocks."
 fig, axes = plt.subplots(2, 1, figsize=(7.5, 7.6))
 sels = {ct: sel_idx("nyc", nyc, ct) for ct in CRIMES}
+scans = {ct: sel_idx("nyc", nyc, ct, "scan") for ct in CRIMES}
 for ax, ct in zip(axes, CRIMES):
-    b = np.array([nyc["areas"].total_bounds, units["nyc"].iloc[sels[ct]].total_bounds])
+    b = np.array([nyc["areas"].total_bounds, units["nyc"].iloc[sels[ct]].total_bounds,
+                  units["nyc"].iloc[scans[ct]].total_bounds])
     pad = 1500
     ext = (b[:, 0].min() - pad, b[:, 1].min() - pad, b[:, 2].max() + pad, b[:, 3].max() + pad)
     plots.case_map(ax, units["nyc"], nyc["areas"], {"c": (sels[ct], plots.BLUE)}, extent=ext,
-                   title=f"{CTYPE_NAME[ct]} crime")
+                   title=f"{CTYPE_NAME[ct]} crime", outlines={"s": (scans[ct], plots.AQUA)})
     plots.scale_bar(ax)
 fig.legend(handles=plots.legend_handles([("Roosevelt Ave, 74th to 111th St", plots.INK, "patch"),
                                          ("Quarter-mile buffer", plots.INK, "outline"),
-                                         ("Contiguous control", plots.BLUE, "patch")]),
-           loc="lower center", ncol=3, frameon=False)
+                                         ("Contiguous control", plots.BLUE, "patch"), ("Scan", plots.AQUA, "edge")]),
+           loc="lower center", ncol=4, frameon=False)
 plt.tight_layout(rect=(0, 0.04, 1, 1))
 plt.show()
 ```
 
 ```{python}
 #| label: fig-nyc-series
-#| fig-cap: "Monthly crime on the Roosevelt Avenue corridor, its contiguous control area, and the microsynth control. Thin lines are monthly counts, thick lines six-month moving averages computed separately before and after October 15, 2024 (dotted line)."
+#| fig-cap: "Monthly crime on the Roosevelt Avenue corridor, its contiguous control area, and the microsynth control. Thin lines are monthly counts, thick lines three-month moving averages computed separately before and after October 15, 2024 (dotted line)."
 series_figure(nyc, nyc_months)
 ```
 
@@ -897,7 +935,7 @@ Markdown(md_table(wdd_table(nyc, "Queens"), left=2))
 
 ```{python}
 #| label: fig-nyc-cumulative
-#| fig-cap: "Running WDD estimate of crimes prevented (negative) or added (positive) on the Roosevelt Avenue corridor, by month since the operation began, with 95% bands, against the contiguous control area and against all of Queens (scaled). The baseline is the 20 months before the operation."
+#| fig-cap: "Running WDD estimate of crimes prevented (negative) or added (positive) on the Roosevelt Avenue corridor relative to its contiguous control area, by month since the operation began. The shaded band is the 95% confidence interval of the estimate. The baseline is the 20 months before the operation."
 B = 20
 cum = {}
 fig, axes = plt.subplots(1, 2, figsize=(7.5, 3.5), sharex=True)
@@ -909,10 +947,12 @@ for ax, ct in zip(axes, CRIMES):
     rq = cumulative_wdd(pre["treated"], pre["city"] / k, post["treated"], post["city"] / k,
                         c_pre_var=pre["city"] / k**2, c_post_var=post["city"] / k**2)
     cum[ct] = {"contiguous": rc, "city": rq}
-    plots.cumulative_panel(ax, rc["m"], {"Contiguous control": (rc, plots.BLUE), "Queens": (rq, plots.MUTED)},
-                           title=f"{CTYPE_NAME[ct]} crime")
+    plots.cumulative_panel(ax, rc["m"], rc, title=f"{CTYPE_NAME[ct]} crime")
 axes[1].set_ylabel("")
-axes[0].legend(loc="lower left")
+rp, rv = cum["property"]["contiguous"], cum["violent"]["contiguous"]
+prop_low_m = int(rp["m"][np.argmin(rp["est"])])
+prop_sig = rp["m"][rp["high"] < 0]
+viol_sig = rv["m"][(rv["high"] < 0) | (rv["low"] > 0)]
 plt.tight_layout()
 plt.show()
 ```
@@ -920,12 +960,15 @@ plt.show()
 The violent crime control area is
 `{python} num(W(nyc, "violent", "contiguous", "n_units"))` blocks in Corona
 and Elmhurst, just south of the corridor and its buffer, including part of
-Flushing Meadows Corona Park (@fig-nyc-map). The property crime control is
-`{python} num(W(nyc, "property", "contiguous", "n_units"))` blocks in Long
-Island City, `{python} f"{W(nyc, 'property', 'contiguous', 'dist_mi'):.1f}"`
-miles away; `{python} num(T(nyc, "property", "n_capped"))` blocks were
-excluded from every method's pool by the single-place cap. The monthly
-series are more variable than Poisson (estimated dispersion
+Flushing Meadows Corona Park (@fig-nyc-map; the white areas inside the park
+are lakes, which have no census blocks). The property crime control is
+`{python} num(W(nyc, "property", "contiguous", "n_units"))` blocks around
+Ozone Park and Richmond Hill in southern Queens,
+`{python} f"{W(nyc, 'property', 'contiguous', 'dist_mi'):.1f}"` miles away;
+`{python} num(T(nyc, "property", "n_capped"))` blocks were excluded from
+every method's pool by the single-place cap. The scan's network circles are
+larger and, for property crime, in a different part of the borough. The
+monthly series are more variable than Poisson (estimated dispersion
 `{python} f"{T(nyc, 'violent', 'phi'):.2f}"` for violent and
 `{python} f"{T(nyc, 'property', 'phi'):.2f}"` for property crime), and the
 searches took `{python} f"{T(nyc, 'violent', 'seconds') / 60:.1f}"` and
@@ -934,27 +977,26 @@ searches took `{python} f"{T(nyc, 'violent', 'seconds') / 60:.1f}"` and
 @fig-nyc-series shows why a matched control matters here. Violent crime on
 the corridor tripled over the matching period, from
 `{python} num(nyc_viol_first)` complaints in its first year to
-`{python} num(nyc_viol_last)` in the year before the operation, peaking in
-the summer of 2024, and its contiguous control followed the same rise month
-for month. Property crime surged in 2021 and 2022, and its control
-follows that too. Both treated series fall sharply when the operation
-begins. So does the violent crime control, which is a quarter mile from the
-corridor and may have shared in the operation's effect, or in whatever else
-brought crime down that fall.
+`{python} num(nyc_viol_last)` in the year before the operation, and its
+contiguous control followed the same rise. Property crime surged in 2021 and
+2022, and its control follows that too. The timing around the launch
+differs by crime type. Violent crime on the corridor peaked in the month
+starting `{python} viol_peak_date` (`{python} num(viol_peak)` complaints) and
+had already fallen to `{python} num(viol_before)` in the month before the
+operation, consistent with the enforcement the city says was already under
+way. Property crime fell right after the launch, from
+`{python} num(prop_before)` complaints in the month before to
+`{python} num(prop_m0)` and `{python} num(prop_m1)` in the first two months.
+(The moving averages are computed separately on each side of the launch, so
+the averages just before it still include the summer peak.)
 
 @tbl-nyc gives the estimates over the 20 months after the launch. Against
 its contiguous control, the WDD for violent crime is
 `{python} est_txt(nyc, "violent", "contiguous")`, a
-`{python} pct(-W(nyc, "violent", "contiguous", "pct"))` reduction whose
-interval includes zero, and for property crime
-`{python} est_txt(nyc, "property", "contiguous")`, a
-`{python} pct(-W(nyc, "property", "contiguous", "pct"))` reduction. Inflating
-the standard errors for overdispersion by $\sqrt{\phi}$ widens the violent
-crime interval to `{python} num(W(nyc, "violent", "contiguous", "low_phi"))`
-to `{python} num(W(nyc, "violent", "contiguous", "high_phi"))`; the property
-crime interval, `{python} num(W(nyc, "property", "contiguous", "low_phi"))`
-to `{python} num(W(nyc, "property", "contiguous", "high_phi"))`, still
-excludes zero. The Queens-wide
+`{python} pct(-W(nyc, "violent", "contiguous", "pct"))` reduction, and for
+property crime `{python} est_txt(nyc, "property", "contiguous")`; both
+intervals include zero, and inflating the standard errors for
+overdispersion by $\sqrt{\phi}$ only widens them. The Queens-wide
 comparison, the closest analogue of the city's claim, gives reductions of
 `{python} pct(-W(nyc, "violent", "city", "pct"))` and
 `{python} pct(-W(nyc, "property", "city", "pct"))`, but it fails the
@@ -969,15 +1011,17 @@ after the launch, against
 for Queens as a whole.
 
 @fig-nyc-cumulative turns the comparison into the running tally an analyst
-would bring to CompStat meetings. Against the contiguous control, the
-property crime tally falls steadily from the first month and its interval
-excludes zero within a few months, ending at
-`{python} signed(cum["property"]["contiguous"]["est"][-1])` after 20 months.
-The violent crime tally hovers near zero for most of the first year and
-only drifts down later, ending at
-`{python} signed(cum["violent"]["contiguous"]["est"][-1])`, with an interval
-that still reaches zero. The Queens-wide comparison would have shown a
-steady decline in violent crime from the start.
+would bring to CompStat meetings, and it shows what a single 20-month
+number hides. Against the contiguous control, property crime on the corridor
+fell from the first month: the tally reached
+`{python} signed(rp["est"].min())` crimes by month `{python} prop_low_m`, and
+its interval excluded zero through month `{python} int(prop_sig.max())`,
+roughly the operation's initial 90-day surge and the months after it. Then
+the corridor's property crime climbed back while the control's kept falling,
+and the tally ends at `{python} signed(rp["est"][-1])` after 20 months. The
+violent crime tally stays near zero for more than a year and then drifts
+down to `{python} signed(rv["est"][-1])`, with an interval that includes
+zero throughout.
 
 *The single-place cap.* Without the cap, the nearest passing area for
 property crime is a different, smaller set of
@@ -1012,28 +1056,37 @@ Markdown(md_table(pd.DataFrame(rows), left=2))
 @tbl-alt lists the best five distinct control areas from each search.
 For the RedBird district they tell a consistent story: every violent crime
 alternative gives an estimate within two standard errors of zero, and the
-property crime alternatives all point to a rise, most of about 20 crimes.
-For Roosevelt Avenue they do not. Violent crime estimates range from
+property crime alternatives all point to a rise, from
+`{python} signed(dal["property"]["alt"]["est"].min())` to
+`{python} signed(dal["property"]["alt"]["est"].max())` crimes. For Roosevelt
+Avenue they do not. Violent crime estimates range from
 `{python} signed(nyc_alt["violent"]["est"].min())` to
 `{python} signed(nyc_alt["violent"]["est"].max())`, and property crime
-estimates from `{python} signed(nyc_alt["property"]["est"].min())` to
-`{python} signed(nyc_alt["property"]["est"].max())`, although every one of
-these areas matched the corridor's pre-period crime about as well as noise
-allows. The spread between statistically equivalent controls is far larger
-than any single estimate's standard error.
+estimates, all increases, from
+`{python} signed(nyc_alt["property"]["est"].min())` to
+`{python} signed(nyc_alt["property"]["est"].max())`, although these areas
+matched the corridor's pre-period crime about as well as noise allows. The
+spread between statistically equivalent controls is larger than any single
+estimate's standard error.
 
-Is the Queens property crime spread just the single-place problem again? A
-stricter cap does not settle it. Excluding blocks with more than 10% of the
+Does the single-place cap drive the Queens property crime results? Every
+passing property crime area under the 20% cap is in the same part of
+southern Queens and implies an increase. Stricter caps change the answer
+but leave nothing that passes: excluding blocks with more than 10% of the
 corridor's pre-period property crime
 (`{python} num(capsens.loc[np.isclose(capsens["cap"], 0.10), "n_capped"].iloc[0])`
-blocks), the best distinct areas give `{python} cap_list(0.10)`; at 5%
+blocks), the best distinct areas have violations from
+`{python} f"{capsens.loc[np.isclose(capsens['cap'], 0.10), 'viol'].min():.2f}"`
+to `{python} f"{capsens.loc[np.isclose(capsens['cap'], 0.10), 'viol'].max():.2f}"`
+and give `{python} cap_list(0.10)`; at 5%
 (`{python} num(capsens.loc[np.isclose(capsens["cap"], 0.05), "n_capped"].iloc[0])`
-blocks), `{python} cap_list(0.05)`. The top-ranked area gives a reduction of
-roughly 200 to 300 crimes under every cap, but the alternatives swing
-widely. Block-level property crime on commercial corridors is dominated by
-shoplifting at a small number of stores, and stores open, close, and change
-how they report; for such series an analyst would do better to analyze
-shoplifting separately from other property crime.
+blocks), violations from
+`{python} f"{capsens.loc[np.isclose(capsens['cap'], 0.05), 'viol'].min():.2f}"`
+and estimates of `{python} cap_list(0.05)`. Block-level property crime on
+commercial corridors is dominated by shoplifting at a small number of
+stores, and stores open, close, and change how they report; for such series
+an analyst would do better to analyze shoplifting separately from other
+property crime.
 
 The practical reading is that a single WDD estimate understates the
 uncertainty about the counterfactual when the treated series is as variable
@@ -1061,8 +1114,9 @@ areas on pre-period crime, with this method or another.
 
 First, do not ask for the best possible pre-period fit. With thousands of
 candidate areas, or thousands of donor weights, the best fit reproduces the
-treated area's noise, and the simulations show it estimates the effect worse
-than a control that is merely as close as noise allows. Microsynth's exact
+treated area's noise, and in the simulations it estimates the effect no
+better than a control that is merely as close as noise allows when trends
+are shared, and worse when they are not. Microsynth's exact
 calibration has the same problem in a different form: its weights reproduce
 every month of the treated series exactly, noise included. Judging the
 match against noise (Poisson, scaled up for overdispersion), at more than
@@ -1073,8 +1127,8 @@ Second, a matched control earns its keep when the treated area does not
 share its surroundings' trend. When neighborhoods share trends, a ring
 around the buffer works as well or better, and is simpler. But
 interventions are placed where crime has been rising, and then the ring and
-the city-wide trend are badly biased, while the matched area cuts the bias
-roughly in half. The analyst does not
+the city-wide trend are badly biased, while the matched area removes most of
+the bias. The analyst does not
 know in advance which world they are in, and the pre-period plot of the
 treated area against a ring is the way to find out.
 
@@ -1087,9 +1141,10 @@ worst of this without looking at the post-period.
 
 The method has limitations. The WDD's Poisson standard error ignores
 overdispersion (unless inflated by $\sqrt{\phi}$) and the uncertainty that
-comes from choosing among many candidate areas, and in the simulations the
-WDD intervals cover the true effect less often than their nominal 95% for
-every control, the contiguous one included. Different passing areas also give noticeably
+comes from choosing among many candidate areas, and when the treated area's
+trend is its own, the WDD intervals in the simulations cover the true effect
+less often than their nominal 95% for every control, the contiguous one
+included. Different passing areas also give noticeably
 different estimates, as the alternatives in @tbl-alt show. Inflating the
 standard error, averaging the WDD over several distinct passing areas, or
 calibrating intervals with placebo areas run through the same search are

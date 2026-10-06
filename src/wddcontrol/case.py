@@ -32,6 +32,7 @@ class Case:
     X: dict  # crime type -> (n_units, n_pre + n_post) counts
     y: dict  # crime type -> (n_pre + n_post,) treated area counts
     crime: pd.DataFrame  # incidents: date, crime_type, unit, in_treated
+    edge: np.ndarray  # boolean: units on the edge of the study region (cannot be enclosed)
 
 
 def build_case(name: str, units: gpd.GeoDataFrame, adj: sparse.csr_matrix, crime: pd.DataFrame, treated_geom,
@@ -72,7 +73,7 @@ def build_case(name: str, units: gpd.GeoDataFrame, adj: sparse.csr_matrix, crime
     inc = crime[["date", "crime_type", "unit"]].assign(in_treated=in_treated)
     return Case(name=name, units=units, graph=graph, treated_geom=treated_geom, treated_units=treated_units,
                 candidates=candidates, dist=dist, start=start, months=months, n_pre=n_pre, n_post=n_post,
-                periods=periods, X=X, y=y, crime=inc)
+                periods=periods, X=X, y=y, crime=inc, edge=geo.edge_units(units))
 
 
 def monthly(case: Case, ctype: str, n_before: int, n_after: int, masks: dict, weights: dict,
@@ -143,11 +144,12 @@ def evaluate(case: Case, ctype: str, n_wdd: int | None = None, objective: str = 
     xy = case.units[["x", "y"]].to_numpy()
     res = contig.search(Xp, yp, case.graph, cand, objective=objective, area=area, top=top,
                         time_limit=time_limit, dist_to_treated=case.dist, xy=xy, center_spacing=center_spacing,
-                        verbose=verbose)
+                        edge=case.edge, verbose=verbose)
     secs = time.perf_counter() - t
     t = time.perf_counter()
     res_fit = contig.search(Xp, yp, case.graph, cand, objective="fit", area=area, top=10,
-                            time_limit=time_limit, xy=xy, center_spacing=center_spacing, verbose=verbose)
+                            time_limit=time_limit, xy=xy, center_spacing=center_spacing, edge=case.edge,
+                            verbose=verbose)
     secs_fit = time.perf_counter() - t
 
     out = {"search": res, "search_fit": res_fit, "seconds": secs, "seconds_fit": secs_fit, "rows": [], "series": {},

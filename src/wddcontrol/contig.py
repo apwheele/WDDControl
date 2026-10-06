@@ -42,6 +42,10 @@ Search is a network scan plus an integer program within each scan window:
    ordering constraint guarantees a connected area (each unit links back to
    c through ever-closer units), keeps the area compact around c, and needs
    only one constraint per unit, so each program is small.
+4. No holes. The program requires any unit whose neighbors are all selected
+   to be selected too, and forbids enclosing a single ineligible unit;
+   remaining enclosed pockets of eligible units are filled afterwards
+   (``fill_holes``), and areas are ranked on their filled versions.
 """
 
 from __future__ import annotations
@@ -294,12 +298,88 @@ def thin_centers(xy: np.ndarray, weight: np.ndarray, spacing: float) -> np.ndarr
 
 
 # ---------------------------------------------------------------------------
+# Holes
+
+
+def fill_holes(nodes: np.ndarray, adj: sparse.csr_matrix, edge: np.ndarray, allowed: np.ndarray) -> tuple[np.ndarray, int]:
+    """Add every enclosed pocket of ``allowed`` units to the area ``nodes`` (global indices).
+
+    A pocket is a connected set of unselected units, every neighbor of which
+    is selected or in the pocket, and none of which lies on the study
+    region's edge (``edge``). Pockets containing a unit that is not allowed
+    are left as they are. Returns (filled nodes, number of pockets left).
+    """
+    nodes = np.asarray(nodes)
+    sel = np.zeros(adj.shape[0], dtype=bool)
+    sel[nodes] = True
+    ring = np.unique(adj[nodes].indices)
+    ring = ring[~sel[ring]]
+    if len(ring) == 0:
+        return nodes, 0
+    # Unselected units reachable from outside the area: start from ring units
+    # on the edge or with a neighbor that is neither selected nor in the ring.
+    region = sel.copy()
+    region[ring] = True
+    rr = adj[ring]
+    sub = rr[:, ring]
+    out_nb = np.add.reduceat((~region[rr.indices]).astype(np.int32), rr.indptr[:-1]) > 0
+    seeds = edge[ring] | out_nb
+    n_comp, lab = sparse.csgraph.connected_components(sub, directed=False)
+    exterior = np.zeros(n_comp, dtype=bool)
+    exterior[np.unique(lab[seeds])] = True
+    add, left = [], 0
+    for c in np.flatnonzero(~exterior):
+        pocket = ring[lab == c]
+        if allowed[pocket].all():
+            add.append(pocket)
+        else:
+            left += 1
+    if not add:
+        return nodes, left
+    # Filling a pocket can only enclose more; repeat until nothing changes.
+    filled = np.union1d(nodes, np.concatenate(add))
+    more, left2 = fill_holes(filled, adj, edge, allowed)
+    return more, left2
+
+
+def hole_rows(gw: np.ndarray, adj: sparse.csr_matrix, deg: np.ndarray, edge: np.ndarray,
+              allowed: np.ndarray) -> list:
+    """Linear rows (positions, coefficients, lower, upper) that forbid one-unit holes in a window.
+
+    ``gw`` are the window's units (global indices, position 0 the center).
+    For a window unit whose neighbors all lie in the window,
+    z_p - sum_{q in N(p)} z_q >= 1 - deg_p (selected whenever all its
+    neighbors are). For an ineligible unit whose neighbors all lie in the
+    window, sum_{q in N(u)} z_q <= deg_u - 1 (never fully enclosed). Units on
+    the study region's edge are skipped, since they cannot be enclosed.
+    """
+    n = adj.shape[0]
+    pos = np.full(n, -1)
+    pos[gw] = np.arange(len(gw))
+    rows = []
+    for p in range(1, len(gw)):
+        g = gw[p]
+        if edge[g]:
+            continue
+        nb = adj.indices[adj.indptr[g]:adj.indptr[g + 1]]
+        if len(nb) == 0 or (pos[nb] < 0).any():
+            continue
+        rows.append((np.append(p, pos[nb]), np.append(1.0, -np.ones(len(nb))), 1.0 - len(nb), np.inf))
+    nbr = np.unique(adj[gw].indices)
+    for u in nbr[~allowed[nbr] & ~edge[nbr]]:
+        nb = adj.indices[adj.indptr[u]:adj.indptr[u + 1]]
+        if len(nb) and (pos[nb] >= 0).all():
+            rows.append((pos[nb], np.ones(len(nb)), -np.inf, len(nb) - 1.0))
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Integer program
 
 
 def solve_window(Xw: np.ndarray, dw: np.ndarray, closer: sparse.csr_matrix, crit: Criteria, thresholds: bool,
                  start: np.ndarray | None = None, eps: float = 1e-3, time_limit: float = 2.0,
-                 degree: np.ndarray | None = None) -> tuple[np.ndarray, str, float]:
+                 degree: np.ndarray | None = None, extra_rows: list | None = None) -> tuple[np.ndarray, str, float]:
     """Best subset of the window under the closer-neighbor ordering constraint.
 
     Columns: z_0..z_{m-1} (binary, z_0 = 1 is the center), over_t and under_t
@@ -319,6 +399,9 @@ def solve_window(Xw: np.ndarray, dw: np.ndarray, closer: sparse.csr_matrix, crit
       and |S| / slope - s <= 1. The slack keeps the program feasible when no
       subset passes; ``big`` is 100 times the window's total distance, so a
       subset that passes beats any that misses by more than 1%.
+
+    ``extra_rows`` are (positions, coefficients, lower, upper) rows on the z
+    columns, such as the no-hole rows from ``hole_rows``.
 
     Returns (positions, solver status, MIP gap).
     """
@@ -351,6 +434,13 @@ def solve_window(Xw: np.ndarray, dw: np.ndarray, closer: sparse.csr_matrix, crit
     nrow = P + m - 1
     row_lo = [target.astype(float), np.full(m - 1, -np.inf)]
     row_hi = [target.astype(float), np.zeros(m - 1)]
+    for idx, coef, lo_, hi_ in extra_rows or []:
+        rows.append(np.full(len(idx), nrow))
+        cols.append(np.asarray(idx))
+        vals.append(np.asarray(coef, dtype=float))
+        row_lo.append([lo_])
+        row_hi.append([hi_])
+        nrow += 1
     if thresholds:
         s = ncol - 1
 
@@ -443,6 +533,10 @@ def solve_window(Xw: np.ndarray, dw: np.ndarray, closer: sparse.csr_matrix, crit
         h.setSolution(ncol, np.arange(ncol, dtype=np.int32), x0)
     h.run()
     status = h.modelStatusToString(h.getModelStatus())
+    if status == "Infeasible" and extra_rows:
+        # the no-hole rows conflict (rare); solve without them
+        return solve_window(Xw, dw, closer, crit, thresholds, start=start, eps=eps, time_limit=time_limit,
+                            degree=degree, extra_rows=None)
     x = np.asarray(h.getSolution().col_value)
     if len(x) != ncol:  # no solution found (cannot happen with a warm start)
         return (np.asarray(start) if start is not None else np.array([0])), status, np.inf
@@ -468,7 +562,8 @@ def search(X: np.ndarray, y: np.ndarray, graph: sparse.csr_matrix, candidates: n
            gamma: float = 3.0, radius: float | None = None, centers: np.ndarray | None = None, top: int = 50,
            time_limit: float = 2.0, refine: int = 8, refine_time: float = 10.0, max_units: int = 600,
            eps: float = 1e-3, dist_to_treated: np.ndarray | None = None, xy: np.ndarray | None = None,
-           center_spacing: float | None = None, verbose: bool = False) -> SearchResult:
+           center_spacing: float | None = None, edge: np.ndarray | None = None, no_holes: bool = True,
+           verbose: bool = False) -> SearchResult:
     """Search for a contiguous control area that tracks ``k * y``.
 
     Parameters
@@ -496,6 +591,9 @@ def search(X: np.ndarray, y: np.ndarray, graph: sparse.csr_matrix, candidates: n
         thinned to one per ``center_spacing`` grid cell of ``xy`` coordinates when given).
     top : number of windows passed to the integer program.
     dist_to_treated : distance of each unit from the treated area (``"near"`` only).
+    edge : units on the study region's outer edge (they cannot be enclosed).
+    no_holes : forbid one-unit holes in the integer program and fill
+        enclosed pockets of candidate units in every reported area.
     """
     t0 = time.perf_counter()
     crit = Criteria.from_series(y, k, tau_mult, z, scales, dispersion)
@@ -512,6 +610,13 @@ def search(X: np.ndarray, y: np.ndarray, graph: sparse.csr_matrix, candidates: n
     dc_all = np.zeros(len(cand)) if dist_to_treated is None else np.asarray(dist_to_treated, dtype=float)[cand]
     tot = Xc.sum(axis=1)
     deg = np.diff(sub.indptr)
+    adj_full = (graph > 0).astype(np.int8).tocsr()
+    deg_full = np.diff(adj_full.indptr)
+    edge_g = np.zeros(len(X), dtype=bool) if edge is None else np.asarray(edge, dtype=bool)
+    allowed_g = np.zeros(len(X), dtype=bool)
+    allowed_g[cand] = True
+    local = np.full(len(X), -1)
+    local[cand] = np.arange(len(cand))
     if centers is None:
         centers_local = np.flatnonzero(tot > 0)
         if center_spacing is not None:
@@ -528,7 +633,10 @@ def search(X: np.ndarray, y: np.ndarray, graph: sparse.csr_matrix, candidates: n
         units_needed = need / max(tot.mean(), 1e-9)
         radius = mean_edge * np.sqrt(units_needed / np.pi) * 1.5
 
-    def make(nodes_local, center_local, method, **kw):
+    def make(nodes_local, center_local, method, fill=True, **kw):
+        if no_holes and fill:
+            filled, _ = fill_holes(cand[nodes_local], adj_full, edge_g, allowed_g)
+            nodes_local = local[filled]
         series = Xc[nodes_local].sum(axis=0)
         return Selection(nodes=cand[nodes_local], cost=float(crit.fit(series)), viol=float(crit.violation(series)),
                          area=float(ac[nodes_local].sum()), center=int(cand[center_local]), method=method, **kw)
@@ -545,7 +653,7 @@ def search(X: np.ndarray, y: np.ndarray, graph: sparse.csr_matrix, candidates: n
         m = scan_prefix(Xw, crit, thresholds)
         g_pos = greedy_grow(Xw, w.closer, crit, thresholds)
         s_sel = make(w.nodes[:m], w.center, "scan")
-        g_sel = make(w.nodes[g_pos], w.center, "greedy")
+        g_sel = make(w.nodes[g_pos], w.center, "greedy", fill=False)
         s_key, g_key = key(s_sel, w.center), key(g_sel, w.center)
         if scan_best is None or s_key < scan_best[0]:
             scan_best = (s_key, s_sel)
@@ -558,27 +666,42 @@ def search(X: np.ndarray, y: np.ndarray, graph: sparse.csr_matrix, candidates: n
     t1 = time.perf_counter()
 
     kept.sort(key=lambda v: v[0])
+    def rows_for(w):
+        return hole_rows(cand[w.nodes], adj_full, deg_full, edge_g, allowed_g) if no_holes else None
+
+    def feasible_start(w, start):
+        """Warm start satisfying the no-hole rows: fill pockets that lie inside the window."""
+        if not no_holes:
+            return start
+        filled, _ = fill_holes(cand[w.nodes[start]], adj_full, edge_g, allowed_g)
+        pos = np.full(len(X), -1)
+        pos[cand[w.nodes]] = np.arange(len(w.nodes))
+        p = pos[filled]
+        return np.sort(p[p >= 0])
+
     sols = []
     for _, w, start in kept[:top]:
         ts = time.perf_counter()
-        pos, status, gap = solve_window(Xc[w.nodes], w.dist, w.closer, crit, thresholds, start=start,
-                                        eps=eps, time_limit=time_limit)
+        extra = rows_for(w)
+        pos, status, gap = solve_window(Xc[w.nodes], w.dist, w.closer, crit, thresholds,
+                                        start=feasible_start(w, start), eps=eps, time_limit=time_limit,
+                                        extra_rows=extra)
         sols.append((make(w.nodes[pos], w.center, "ilp", status=status, gap=gap, seconds=time.perf_counter() - ts),
-                     w, pos))
+                     w, pos, extra))
     sols.sort(key=lambda v: key(v[0], v[1].center))
-    # Second stage: smooth the shape of the best passing areas (fill holes,
-    # trim tendrils) by adding the perimeter to the objective.
+    # Second stage: smooth the shape of the best passing areas (trim
+    # tendrils, round out the boundary) by adding the perimeter to the objective.
     if perimeter and thresholds:
-        for i, (sel_, w, pos) in enumerate(sols[:refine]):
+        for i, (sel_, w, pos, extra) in enumerate(sols[:refine]):
             if sel_.viol > 1 + 1e-9:
                 continue
             ts = time.perf_counter()
             pos2, status, gap = solve_window(Xc[w.nodes], w.dist, w.closer, crit, True, start=pos, eps=eps,
-                                             time_limit=refine_time, degree=deg[w.nodes])
+                                             time_limit=refine_time, degree=deg[w.nodes], extra_rows=extra)
             new = make(w.nodes[pos2], w.center, "ilp", status=status, gap=gap,
                        seconds=sel_.seconds + time.perf_counter() - ts)
             if new.viol <= 1 + 1e-9:
-                sols[i] = (new, w, pos2)
+                sols[i] = (new, w, pos2, extra)
         sols.sort(key=lambda v: key(v[0], v[1].center))
     sols = [v[0] for v in sols]
     t2 = time.perf_counter()
