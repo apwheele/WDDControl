@@ -1,0 +1,29 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv
+
+# Quarto build artifacts
+/.quarto/
+paper.ipynb
+# paper_files/figure-commonmark holds the PNGs paper.md links to on GitHub;
+# everything else in paper_files/ is not needed.
+paper_files/*
+!paper_files/figure-commonmark/
+!paper_files/figure-commonmark/**
+*_cache/
+*.log
+*.aux
+*.toc
+*.out
+
+# run logs
+results/log_*.txt

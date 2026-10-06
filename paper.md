@@ -1,0 +1,445 @@
+# Drawing contiguous control areas for the weighted displacement difference test
+Andrew P. Wheeler
+
+# Introduction
+
+A police department puts extra patrols in a hot spot, a city funds a business improvement district, or a task force cleans up a commercial corridor. Afterwards someone asks whether crime went down. The weighted displacement difference (WDD) test ([Wheeler and Ratcliffe 2018](#ref-wheeler2018wdd)) is a simple answer that crime analysts can compute by hand: compare the change in crime in the treated area with the change in a control area, and attach a Poisson standard error. The test is only as good as the control area, though, and in practice the analyst draws it by eye, as a ring around the treated area, the rest of the police beat, or a neighborhood that “looks similar.”
+
+Synthetic control methods ([Abadie and Gardeazabal 2003](#ref-abadie2003); [Abadie, Diamond, and Hainmueller 2010](#ref-abadie2010)) replace that judgment with an optimization: weight untreated units so their weighted sum tracks the treated unit before the intervention. For crime at small geographies, microsynth ([Robbins, Saunders, and Kilmer 2017](#ref-robbins2017); [Robbins and Davenport 2021](#ref-robbins2021)) calibrates a weight for every untreated micro area so that weighted pre-period counts match the treated area’s exactly. The result is not an area. It is hundreds or thousands of blocks scattered across a city, each carrying a fractional weight, which is hard to explain to a city council, hard to check against local knowledge (did one of those blocks lose a big store?), and does not fit the WDD’s logic of counting crimes in a place.
+
+This paper describes a method to draw the control area as a single, contiguous geographic area, with no weights, whose monthly crime before the intervention tracks the treated area’s in the same way a synthetic control does: plot the two series and they move together. Given small units (census blocks or grid cells), their adjacency, and the treated area, it searches for a connected set of units outside a buffer around the treated area whose summed monthly counts follow the treated counts. The search combines a network scan, which grows candidate areas outward from many possible centers through the adjacency graph, with a small integer program inside each scan window that picks which units to keep. A constraint that every selected unit borders a selected unit closer to the window’s center guarantees the area is connected and keeps each integer program small enough to solve in about a second.
+
+A second contribution concerns how close a match to ask for. With thousands of candidate areas, the best-fitting one matches the noise in the treated series, not just its trend, and in simulations below that makes the effect estimate worse, not better. I instead require the control to be statistically indistinguishable from the treated area before the intervention, month to month, over six-month stretches, and in overall level and trend, judged against what Poisson noise alone would produce. Among the areas that pass, the method picks the one nearest the treated area. The rule is fast and easy to explain: the control area is the closest contiguous area whose pre-intervention crime is indistinguishable from the treated area’s.
+
+I illustrate the method on synthetic grids, where the true effect is known, and compare it with control areas analysts commonly use (a surrounding ring and the whole city), a pure scan, the best-fitting contiguous area, and a Python replication of microsynth. I then apply it to two interventions with open crime data: the RedBird public improvement district in Dallas, Texas, which began its first year of services in 2026, and Operation Restore Roosevelt, a 2024 multi-agency enforcement operation on Roosevelt Avenue in Queens, New York. For the second I show how the chosen control area turns the WDD into a running, month-by-month tally of crimes prevented, the kind of counter that can be updated at each CompStat meeting ([Wheeler 2024](#ref-wheeler2024compstat)). Finding each control area takes 2.6 to 4.1 minutes on a four-core desktop computer.
+
+# Background
+
+## The WDD test
+
+Let $T_0$ and $T_1$ be crime counts in the treated area before and after an intervention, and $C_0$ and $C_1$ the counts in a control area over the same periods. The WDD estimate of crimes prevented (negative) or added (positive) is the difference in differences
+
+```math
+\widehat{\Delta} = (T_1 - T_0) - (C_1 - C_0),
+```
+
+and if the four counts are independent Poisson variables its variance is $T_0 + T_1 + C_0 + C_1$ ([Wheeler and Ratcliffe 2018](#ref-wheeler2018wdd)). The original test also has a displacement area around the treated area with its own control ([Bowers and Johnson 2003](#ref-bowers2003); [Guerette and Bowers 2009](#ref-guerette2009)); I leave displacement aside, since the question here is how to choose the control.
+
+The estimate is unbiased if, absent the intervention, the treated area’s count would have changed by the same number of crimes as the control’s. That is a parallel trends assumption in counts. It is most plausible when the control has about as much crime as the treated area and has followed the same path over time. A control area with twice the crime will, if crime moves proportionally, change by twice as many crimes, so the analyst should either pick a control of similar volume or scale it: a control with $k$ times the treated area’s crime enters as $(C_1 - C_0)/k$, with variance $(C_0 + C_1)/k^2$. Both the volume and the path are visible before the intervention, which is what synthetic control methods exploit.
+
+## Synthetic controls and microsynth
+
+The synthetic control method ([Abadie and Gardeazabal 2003](#ref-abadie2003); [Abadie, Diamond, and Hainmueller 2010](#ref-abadie2010); [Abadie 2021](#ref-abadie2021)) builds a counterfactual for one treated unit as a weighted average of untreated units, with non-negative weights chosen to reproduce the treated unit’s pre-intervention outcomes. Saunders et al. ([2015](#ref-saunders2015)) adapted it to place-based crime interventions. Robbins, Saunders, and Kilmer ([2017](#ref-robbins2017)) extended it to micro-level data, where the treated area is made up of many small units and there are thousands of potential donors. Microsynth finds weights by survey calibration ([Deville and Särndal 1992](#ref-deville1992)): each untreated unit’s weight is as close as possible to a common base weight, subject to the weighted sums exactly matching the treated area’s totals on the pre-period outcomes in each time period (and any covariates). With the raking distance this is the convex program
+
+```math
+\min_{w \ge 0} \sum_i \left[ w_i \log(w_i/d_i) - w_i + d_i \right]
+\quad \text{subject to} \quad \sum_i w_i x_{it} = y_t \;\; \text{for all } t,
+\quad \sum_i w_i = n_T,
+```
+
+where $x_{it}$ are untreated units’ counts, $y_t$ the treated area’s counts, $n_T$ the number of treated units and $d_i = n_T / n$ the base weight. The weights spread over the whole study region.
+
+## Contiguity and scan statistics
+
+Requiring a set of selected areas to be connected is a familiar constraint in districting and spatial optimization. Exact formulations use network flows ([Shirabe 2005](#ref-shirabe2005)) or cut constraints added as needed ([Validi, Buchanan, and Lykhovyd 2022](#ref-validi2022)). Wheeler ([2019](#ref-wheeler2019pmed)) uses a simpler version for patrol districts: each area assigned to a district must border another assigned area that is closer to the district’s center. That idea is what makes the method here fast. Scan statistics ([Kulldorff 1997](#ref-kulldorff1997)) search over many candidate zones, classically circles of increasing radius around every location; flexibly shaped scans ([Tango and Takahashi 2005](#ref-tango2005)) grow connected zones through the adjacency graph instead. The method below is a scan in that sense, but it optimizes the shape within each window rather than enumerating shapes.
+
+# Method
+
+## Setup
+
+Divide the study region into small units $i = 1, \dots, N$ (census blocks in the case studies, grid cells in the simulations), with an adjacency graph connecting units that share a boundary (rook contiguity, so blocks that only touch at a corner are not neighbors). The treated area is given. Units within a buffer distance of it are removed, so the control area is not contaminated by spillover or displacement, as are any units the analyst wants to exclude (for example, other places receiving the same kind of intervention). The remaining units are candidates, and the control area must be connected through candidate units alone.
+
+Let $y_t$ be the treated area’s crime count in pre-intervention month $t = 1, \dots, P$ and $x_{it}$ unit $i$’s. For a candidate control area $S$ the monthly gap is
+
+```math
+D_t(S) = \sum_{i \in S} x_{it} - k\, y_t .
+```
+
+I use $k = 1$ throughout, so the control area should have the same crime as the treated area in every month, which matches both the volume and the trend.
+
+## How close a match to ask for
+
+The obvious objective is to minimize the total absolute gap $F(S) = \sum_t |D_t(S)|$. With thousands of units there are astronomically many connected areas, and the best one fits the treated series more closely than its noise allows. Suppose instead a control’s expected counts were exactly $k$ times the treated area’s expected counts $\mu_t$. The gap would still have variance $v_t = \phi (k + k^2)\mu_t$, where $\phi = 1$ for Poisson counts and $\phi > 1$ for overdispersed counts, and expected absolute value about $\sqrt{2 v_t/\pi}$. I estimate $\mu_t$ by $y_t$ and $\phi$ by the treated series’ Pearson dispersion around its seven-month centered moving average (at least one). Monthly crime counts for small areas are often overdispersed, and with pure Poisson thresholds few areas pass for the more variable series. A control area *passes* if all four of these summaries are within what a perfect match would produce:
+
+1.  the monthly fit $\sum_t |D_t|$ is at most $\tau = \sum_t \sqrt{2 v_t / \pi}$;
+2.  the six-month fit $\sum_b |\sum_{t \in b} D_t|$, over consecutive six-month blocks $b$ ending at the intervention, is at most $\tau_6 = \sum_b \sqrt{2 V_b / \pi}$ with $V_b = \sum_{t \in b} v_t$, so the two series also track each other over the medium term, where a plot’s smoothed lines would show a drift that monthly noise hides;
+3.  the level gap $|\sum_t D_t|$ is at most one standard deviation, $\sqrt{\sum_t v_t}$;
+4.  the trend gap $|\sum_t (t - \bar t) D_t|$ is at most one standard deviation, $\sqrt{\sum_t (t - \bar t)^2 v_t}$.
+
+The violation of an area is the largest of the four ratios of a summary to its threshold, so an area passes when its violation is at most one.
+
+Among passing areas the method picks the one nearest the treated area. Nearby places share more of the unmeasured things that drive crime trends, and analysts already reach for nearby comparison areas. The search also reports the next-best distinct passing areas, so the analyst can see how much the estimate depends on the choice and can bring local knowledge to it. If no area passes, the search returns the area with the smallest violation.
+
+## The search
+
+*Windows.* From a center unit $c$, order candidate units by their shortest-path distance $d_c(i)$ through the adjacency graph, where each edge is as long as the distance between the two units’ centers. The window $W_c$ is the nearest units holding three times the treated area’s pre-period crime (at most 600 units), enough room to choose from. Every candidate unit with any crime can be a center; in the case studies I thin centers to one per 800-foot grid cell, since windows centered on neighboring blocks are nearly identical.
+
+*Screening.* Two quick fits are computed in every window. The pure scan takes the shortest prefix of the distance ordering that passes (or the prefix with the smallest violation), a “network circle” around $c$. A greedy fit starts from $c$ and repeatedly adds the unit that most reduces the violation, among units adjacent to one already selected and closer to $c$, stopping when the area passes or nothing helps. Windows are ranked by their best screening result (passing windows by distance from the treated area, then the rest by violation), and the top 50 go to the integer program.
+
+*Integer program.* Within window $W_c$, let $z_i \in \{0, 1\}$ indicate a selected unit and $o_t, u_t \ge 0$ the over- and under-count in month $t$, so $o_t - u_t = D_t$. Write $\tilde d_i$ for unit $i$’s network distance from the center rescaled to mean one, $N_c(i)$ for the neighbors of $i$ in the window that are closer to $c$, and $s \ge 0$ for a slack. The program is
+
+```math
+\begin{aligned}
+\min \quad & \sum_{i \in W_c} \tilde d_i z_i + M s + \epsilon F / \tau \\
+\text{s.t.} \quad & \sum_{i \in W_c} x_{it} z_i - o_t + u_t = k\, y_t && \text{for all } t \\
+& \textstyle\sum_t (o_t + u_t) \le \tau (1 + s), \quad \sum_b e_b \le \tau_6 (1 + s), \quad
+  e_b \ge \pm \sum_{t \in b} (o_t - u_t) \\
+& \textstyle\left|\sum_t (o_t - u_t)\right| \le \ell (1 + s), \quad
+  \left|\sum_t (t - \bar t)(o_t - u_t)\right| \le \sigma (1 + s) \\
+& z_i \le \sum_{j \in N_c(i)} z_j && \text{for all } i \in W_c,\; i \ne c \\
+& z_c = 1, \quad z_i \in \{0, 1\}, \quad o_t, u_t, e_b, s \ge 0,
+\end{aligned}
+```
+
+where $\ell$ and $\sigma$ are the level and trend thresholds. The objective is the p-median measure of compactness, the summed distance of selected units from the center ([Wheeler 2019](#ref-wheeler2019pmed)). The slack keeps the program feasible when no subset of the window passes; its penalty $M$ is 100 times the window’s total distance, so any subset that passes beats any that misses. The small $\epsilon$ term breaks ties toward better fits.
+
+The last constraint does the work. Every selected unit other than the center must border a selected unit strictly closer to the center. Following those neighbors from any selected unit traces a path of strictly decreasing distance that must end at $c$, so every feasible solution is a connected area containing $c$. No unit is ruled out, since a unit’s predecessor on its shortest path to $c$ is a closer neighbor. The constraint restricts the shape, which must be star-shaped around its center in network distance, but that is a compactness requirement an analyst would want anyway, and the scan over centers recovers areas centered anywhere. It needs one constraint per unit, against the many cut constraints or flow variables of an exact contiguity formulation ([Validi, Buchanan, and Lykhovyd 2022](#ref-validi2022)), so each window’s program solves with HiGHS ([Huangfu and Hall 2018](#ref-huangfu2018)) within a two-second limit. (When the limit is reached the best solution found is used; because the final choice is the nearest window holding a passing area, it rarely depends on how far the solver got within a window.)
+
+*Shape refinement.* Minimizing distance alone selects the units it needs and connects them with as few others as possible, which can leave holes and thin tendrils. For the eight best passing areas the program is solved again with the area’s perimeter added to the objective, counted as adjacencies between a selected and an unselected unit, $\sum_i \text{deg}_i z_i - 2 \sum_{(i,j)} w_{ij}$ with $w_{ij} \le z_i$ and $w_{ij} \le z_j$ for each adjacent pair, warm-started from the first solution and allowed ten seconds. That fills holes and trims tendrils whenever doing so keeps the area passing.
+
+*One place should not be the control.* A census block holding a big-box store or a large apartment complex can carry a large share of an area’s crime, and its counts can jump or vanish for reasons unrelated to the intervention (the store closes, or changes how it reports shoplifting). Synthetic control practice already advises dropping donors hit by such idiosyncratic shocks ([Abadie 2021](#ref-abadie2021)). Because the post-period should not be used to choose the control, I apply a design-stage rule instead: in the case studies, no block holding more than 20% of the treated area’s pre-period crime can be part of any method’s control. <a href="#sec-nyc" class="quarto-xref">Section 6</a> shows what this guards against.
+
+## Comparison control areas
+
+I compare the contiguous control area with five alternatives.
+
+- *Ring:* candidate units in the band just outside the buffer (from one to two times the buffer distance from the treated area), a common informal choice, scaled by its pre-period crime relative to the treated area’s.
+- *City:* every candidate unit, scaled the same way, which amounts to comparing the treated area’s change with the city-wide (or borough-wide) trend.
+- *Scan:* the best network circle from the screening step: contiguous and passing if any circle passes, but with no shape optimization.
+- *Best fit:* the contiguous area minimizing $F(S)$, from the same search with the fit as the objective and no thresholds.
+- *Microsynth:* raking weights over every candidate unit matching the treated area’s monthly pre-period counts and the number of treated units exactly, as above. I match only the monthly outcome counts, not covariates, so every method sees the same information.
+
+I compute microsynth’s weights with the raking algorithm of survey calibration ([Deville and Särndal 1992](#ref-deville1992)), Newton’s method on the dual of the problem above, which reproduces the convex program’s solution. When the intercept constraint makes exact calibration infeasible, as it does when the treated area is much hotter per unit than typical donors, I drop it and calibrate on the outcomes alone, which is microsynth’s own fallback of matching fewer variables exactly.
+
+For the weighted microsynth control, the WDD uses weighted counts $C_0 = \sum_i w_i c_{0i}$ and $C_1 = \sum_i w_i c_{1i}$, with Poisson variance $\sum_i w_i^2 (c_{0i} + c_{1i})$ for the control part. All WDD estimates compare equal-length windows before and after the intervention. The WDD’s Poisson standard error can be put on the same quasi-Poisson footing as the thresholds by multiplying it by $\sqrt{\phi}$; I report both.
+
+## A running WDD
+
+Once the control area is chosen, the WDD can be tracked month by month after the intervention, the cumulative counter of crimes prevented that Wheeler ([2024](#ref-wheeler2024compstat)) suggests for CompStat follow-up. With $T_j$ and $C_j$ the counts in post month $j$ and a baseline of $B$ months before the intervention, the running estimate after $m$ months is
+
+```math
+\widehat{\Delta}_m = \sum_{j=1}^{m} (T_j - C_j) - \frac{m}{B} \sum_{\text{baseline}} (T - C),
+\qquad
+\operatorname{Var}(\widehat{\Delta}_m) = \sum_{j=1}^{m} (T_j + C_j) + \left(\frac{m}{B}\right)^2 \sum_{\text{baseline}} (T + C),
+```
+
+the crimes prevented so far relative to the baseline gap. At $m = B$ it is the WDD over equal windows. Because the control area is matched to the treated area month by month, the plot of the running estimate starts at zero and moves only when the treated area departs from its control.
+
+# Synthetic data
+
+## Design
+
+Each synthetic world is a 40 by 40 grid of cells with 60 months before an intervention and 12 after. A cell’s expected monthly count is $\lambda_{it} = \exp(\mu + a_i + b_i t/12 + c_i g(t) + s(t))$, where $a_i$ is a spatially smooth level (a Gaussian random field plus cell-level noise), $b_i$ a spatially smooth yearly trend, $c_i g(t)$ a temporary rise or fall peaking mid pre-period with a smooth field $c_i$, and $s(t)$ a common seasonal cycle. Counts are Poisson with gamma-distributed overdispersion. The treated area is a 4 by 4 block of cells drawn among the hottest 10% of such blocks, as interventions target hot spots, with cells within two cells of it excluded as a buffer. After the intervention its crime falls by 20%. The WDD compares the last 12 pre-period months with the 12 post-period months, and its target is the expected number of crimes prevented, $-0.2$ times the treated area’s expected post-period crime.
+
+Two scenarios differ in how local the trends are. In the *smooth* scenario the trend field varies only over long distances (about six cells), so the treated hot spot’s neighbors share its trend. In the *local* scenario the trend adds a short-range field (about one or two cells), and the treated hot spot is drawn from the quarter of hot spots whose short-range trend is highest: crime there was rising relative to its surroundings, as it often is where interventions are placed. I draw 50 worlds in each scenario. To keep the simulations quick, every cell with crime is a scan center, the integer program runs in the best 20 windows with a one-second limit, and only the chosen area’s shape is refined; there is no single-place cap, since no synthetic cell carries a store.
+
+## An example
+
+<a href="#fig-sim-map" class="quarto-xref">Figure 1</a> shows one world from the local scenario and the control areas each method chooses. The ring hugs the buffer. The contiguous control is a compact area just outside the buffer that passes all four checks. The scan’s network circle is nearby. The best-fitting area sprawls, and microsynth spreads its weight over 800 cells across the whole grid. <a href="#fig-sim-series" class="quarto-xref">Figure 2</a> shows why the ring fails in this world: the treated area’s crime was rising before the intervention and the ring’s was not, while the contiguous control follows the treated series.
+
+![](paper_files/figure-commonmark/fig-sim-map-output-1.png)
+
+![](paper_files/figure-commonmark/fig-sim-series-output-1.png)
+
+## Monte Carlo results
+
+<div class="cell-output cell-output-display cell-output-markdown" execution_count="5">
+
+| Scenario | Control    | Bias | RMSE | Trend RMSE | Mean SE | Coverage (%) | Passes | Cells |
+|:---------|:-----------|-----:|-----:|-----------:|--------:|-------------:|-------:|------:|
+| Smooth   | Contiguous |   -1 |   57 |         17 |      39 |      88 / 90 |   100% |    20 |
+| Smooth   | Scan       |   -3 |   59 |         18 |      39 |      82 / 90 |    98% |    44 |
+| Smooth   | Best fit   |  +13 |   74 |         26 |      39 |      80 / 84 |    76% |   124 |
+| Smooth   | Ring       |   +4 |   49 |         20 |      33 |      84 / 90 |    42% |    80 |
+| Smooth   | City       |  +17 |   71 |         49 |      28 |      60 / 72 |    26% | 1,536 |
+| Smooth   | Microsynth |  +30 |  101 |         30 |      33 |      60 / 72 |   100% | 1,076 |
+| Local    | Contiguous |  +80 |  217 |        133 |      53 |      68 / 76 |    84% |    37 |
+| Local    | Scan       |  +72 |  194 |        146 |      53 |      72 / 78 |    74% |    53 |
+| Local    | Best fit   | +120 |  232 |        168 |      52 |      56 / 66 |    38% |   112 |
+| Local    | Ring       | +151 |  279 |        248 |      44 |      46 / 58 |     4% |    80 |
+| Local    | City       | +170 |  320 |        293 |      38 |      40 / 48 |    12% | 1,536 |
+| Local    | Microsynth | +164 |  326 |        174 |      55 |      46 / 58 |   100% |   858 |
+
+</div>
+
+<a href="#tbl-sim" class="quarto-xref">Table 1</a> summarizes the 50 worlds in each scenario. The true effect averages -94 crimes in the smooth scenario and -204 in the local one, where the rising hot spots have more crime.
+
+In the smooth scenario every local control shares the treated area’s trend, and the trend errors of the ring, the scan, the best fit, and the contiguous control are all small (trend RMSE 17 to 26, smallest for the contiguous control). The contiguous control is essentially unbiased (-1). The ring has the smallest overall error (RMSE 49 against 57 for the contiguous control), because it holds several times the treated area’s crime and scaling it down shrinks its noise. The city-wide trend misses local trends, and microsynth is the least accurate control (RMSE 101) even though it matches every pre-period month exactly.
+
+The local scenario is the one matching is for. The treated hot spot’s crime was rising relative to its surroundings, so the ring and the city-wide trend are badly biased: +151 and +170 crimes, against a true effect of -204, so on average they miss 74% and 83% of the reduction. The contiguous control cuts the bias to +80 and has the smallest trend error (RMSE 133, against 248 for the ring). It does not remove the bias: a contiguous area has to include whatever lies between the places whose trends match, and with noisy series an area can pass the checks while its trend still differs. The best-fitting area, which chases noise, is more biased (+120), and so is microsynth (+164).
+
+Two other results matter for practice. First, the pure scan does about as well as the integer program (RMSE 194 and 59 against 217 and 57): most of the gain comes from requiring the pre-period match and taking the nearest area that meets it, while the integer program finds a passing area more often (84% of local worlds against 74% for the scan) and controls its shape. Second, no control’s 95% interval reaches its nominal coverage. The Poisson standard error ignores both overdispersion and the uncertainty in the control’s trend; inflating it by $\sqrt{\phi}$ helps (68% to 76% for the contiguous control in the local scenario) but does not close the gap. Finding a control area took about 22 seconds per world.
+
+# Case study 1: the RedBird public improvement district, Dallas
+
+The former Red Bird Mall in southern Dallas was defunct when a developer bought it in 2015 and began rebuilding it as a mixed-use district with medical clinics, a Dallas College workforce center, and an entrepreneurship center ([The LAB Report Dallas 2026](#ref-labreport2026)). In 2025 property owners petitioned for a public improvement district, and the Dallas City Council created the RedBird PID on May 28, 2025, for a ten-year term from January 1, 2026 through 2035 ([City of Dallas 2025](#ref-dallas2025pid)). Its service plan funds public safety and enhanced security, lighting and signage, and marketing, from an assessment of about \$0.15 per \$100 of property value, around \$300,000 a year. The district covers 317 acres around the former mall, from U.S. Highway 67 west to Cockrell Hill Road and from Camp Wisdom Road south to Interstate 20. Similar districts elsewhere have been credited with reducing crime ([MacDonald et al. 2010](#ref-macdonald2010); [Cook and MacDonald 2011](#ref-cook2011)). PID revenue lags its creation, and local reporting describes the district’s new security measures as starting in August 2026, funded in the meantime by \$200,000 of the council district’s pandemic recovery money ([The LAB Report Dallas 2026](#ref-labreport2026)). The nine months of data after January 1, 2026 therefore mostly precede the district’s full services. The case study is an illustration of choosing the control area, not a final evaluation of the district.
+
+I use Dallas Police Department incidents from the city’s open data portal, January 2019 through September 2026. Violent crime is murder, aggravated assault, and robbery; property crime is burglary, larceny, and motor vehicle theft. An incident with several offenses counts once, as its most serious offense, and family-violence aggravated assaults are almost entirely withheld from the public file. There are 32,894 violent and 312,793 property incidents in the seven pre-intervention years. Incidents are assigned to the 18,946 2020 census blocks with land area inside the city. The treated counts are incidents inside the PID boundary, from the city’s GIS layer, or within 100 feet of it, which picks up the boundary streets. In 2025 the district had 40 violent and 140 property incidents. Blocks within a quarter mile of the district are excluded as a buffer, as are blocks touching any of the city’s other 17 improvement districts. The search matches the 84 months from January 2019 through December 2025, and the WDD compares the nine months after January 1, 2026 with the nine months before.
+
+![](paper_files/figure-commonmark/fig-dallas-map-output-1.png)
+
+![](paper_files/figure-commonmark/fig-dallas-series-output-1.png)
+
+<div class="cell-output cell-output-display cell-output-markdown" execution_count="9">
+
+| Crime    | Control    | Blocks |      k | Violation |     C0 |     C1 | WDD (SE) |    95% CI |
+|:---------|:-----------|-------:|-------:|----------:|-------:|-------:|---------:|----------:|
+| Violent  | Contiguous |     73 |   1.00 |      1.00 |     20 |     32 |  -6 (11) | -27 to 15 |
+| Violent  | Scan       |    126 |   1.00 |      0.99 |     23 |     32 |  -3 (11) | -24 to 18 |
+| Violent  | Best fit   |    133 |   1.00 |      0.35 |     29 |     34 |  +1 (11) | -21 to 23 |
+| Violent  | Ring       |     32 |   0.13 |      5.58 |      3 |      3 |  +6 (21) | -35 to 47 |
+| Violent  | City       | 17,387 |  86.10 |      1.20 |  2,110 |  1,785 |  +10 (8) |  -6 to 26 |
+| Violent  | Microsynth |    418 |   1.00 |      0.00 |     29 |     18 |  +17 (9) |   0 to 35 |
+| Property | Contiguous |     79 |   1.00 |      0.97 |    104 |     99 | +20 (21) | -20 to 60 |
+| Property | Scan       |    110 |   1.00 |      0.97 |    106 |    108 | +13 (21) | -28 to 54 |
+| Property | Best fit   |    198 |   1.00 |      0.48 |    116 |    130 |  +1 (22) | -41 to 43 |
+| Property | Ring       |     32 |   0.31 |      4.39 |     31 |     23 | +41 (28) | -14 to 96 |
+| Property | City       | 17,293 | 153.80 |      1.21 | 19,043 | 17,326 | +26 (15) |  -3 to 55 |
+| Property | Microsynth | 10,456 |   1.00 |      0.00 |    103 |     94 | +24 (16) |  -7 to 56 |
+
+</div>
+
+The search screened 4,600 windows for violent crime and 7,365 for property crime, and took 2.6 and 3.9 minutes. The estimated dispersion of the district’s monthly counts is 1.00 for violent and 1.41 for property crime. <a href="#fig-dallas-map" class="quarto-xref">Figure 3</a> shows the two control areas. For violent crime it is 73 blocks (2.4 square miles) south of the district, across Interstate 20; for property crime, 79 blocks (2.6 square miles) north of it. Both are larger than the half-square-mile district, because the former mall has more crime per square mile than the neighborhoods around it. Microsynth, by contrast, puts weight on 418 blocks across the city for violent crime and 10,456 for property crime. <a href="#fig-dallas-series" class="quarto-xref">Figure 4</a> shows that the contiguous controls track the district’s monthly crime from 2019 through 2025, including the fall in property crime in 2019 and 2020 and its rise in 2021 and 2022. Microsynth’s weighted series reproduces the district’s monthly counts exactly (its line lies under the treated area’s before 2026).
+
+<a href="#tbl-dallas" class="quarto-xref">Table 2</a> gives the WDD estimates. Violent crime in the district went from 29 incidents in the nine months before January 2026 to 35 in the nine months after, in line with local reports of rising violence in part of the district ([The LAB Report Dallas 2026](#ref-labreport2026)), but its contiguous control rose by more, and the WDD is -6 (SE 11). Property crime went from 103 to 118, and the WDD against its contiguous control is +20 (SE 21). Neither is distinguishable from no change, which is what one would expect of a district whose services had barely begun.
+
+The comparison controls show why the choice matters. The ring around the buffer has only 13% of the district’s violent crime and 31% of its property crime: the former mall is a hot spot relative to its immediate surroundings, and scaling up so small a control inflates its noise (standard errors of 21 and 28). The city-wide trend fails the pre-period checks for both crime types. Microsynth gives the largest violent crime estimate, +17 (SE 9), with an interval that just excludes zero: its weighted control fell from 29 to 18 crimes while the contiguous areas rose. Matching every pre-period month exactly, noise included, is what the simulations show produces erratic estimates.
+
+# Case study 2: Operation Restore Roosevelt, Queens
+
+Operation Restore Roosevelt began on October 15, 2024: a 90-day, multi-agency enforcement push by the New York Police Department, with state troopers, on Roosevelt Avenue from 74th Street to 111th Street in Jackson Heights, Elmhurst, and Corona, Queens, aimed at brothels, illegal street vending, retail theft and the sale of stolen goods, and unlicensed vehicles ([Queens Daily Eagle 2024](#ref-queenseagle2024)). It was extended after the first 90 days. In January 2025 the police commissioner credited it with a 25% reduction in crime in the area ([QNS 2025](#ref-qns2025)).
+
+I use NYPD complaint records for Queens from the city’s open data portal (the historic file through 2025 and the year-to-date file through June 2026). Violent crime is murder, robbery, and felony assault; property crime is burglary, grand and petit larceny, and motor vehicle theft. Complaints are assigned to the 13,926 2020 census blocks with land area in Queens. The treated area is the TIGER centerline of Roosevelt Avenue between the two cross streets, about two miles, buffered by 250 feet to take in the avenue and the buildings fronting it. In the year before the operation it had 462 violent and 824 property complaints. Months run from the 15th to the 14th. The search matches the 72 months before the launch (October 15, 2018 to October 14, 2024), blocks within a quarter mile of the corridor are excluded, and the WDD compares the 20 months after the launch, through June 14, 2026, with the 20 months before.
+
+![](paper_files/figure-commonmark/fig-nyc-map-output-1.png)
+
+![](paper_files/figure-commonmark/fig-nyc-series-output-1.png)
+
+<div class="cell-output cell-output-display cell-output-markdown" execution_count="13">
+
+| Crime    | Control    | Blocks |     k | Violation |     C0 |     C1 |  WDD (SE) |       95% CI |
+|:---------|:-----------|-------:|------:|----------:|-------:|-------:|----------:|-------------:|
+| Violent  | Contiguous |    180 |  1.00 |      1.00 |    695 |    596 |  -79 (50) |   -178 to 20 |
+| Violent  | Scan       |    375 |  1.00 |      1.21 |    688 |    629 | -119 (51) |  -218 to -20 |
+| Violent  | Best fit   |    303 |  1.00 |      1.20 |    663 |    572 |  -87 (50) |   -185 to 11 |
+| Violent  | Ring       |    248 |  1.19 |      3.79 |    725 |    552 |  -33 (46) |   -124 to 58 |
+| Violent  | Queens     | 13,595 | 27.24 |      6.35 | 13,989 | 12,879 | -137 (36) |  -208 to -67 |
+| Violent  | Microsynth | 12,195 |  1.00 |      0.00 |    718 |    412 | +128 (45) |    40 to 217 |
+| Property | Contiguous |    122 |  1.00 |      1.00 |  1,394 |  1,352 | -308 (72) | -450 to -166 |
+| Property | Scan       |    170 |  1.00 |      2.31 |  1,423 |  1,499 | -426 (74) | -570 to -282 |
+| Property | Best fit   |    232 |  1.00 |      1.15 |  1,375 |  1,014 |  +11 (70) |  -126 to 148 |
+| Property | Ring       |    247 |  1.45 |      8.91 |  1,659 |  1,320 | -116 (63) |    -238 to 7 |
+| Property | Queens     | 13,582 | 48.98 |      8.17 | 57,332 | 55,164 | -306 (50) | -405 to -207 |
+| Property | Microsynth |  9,796 |  1.00 |      0.00 |  1,423 |    895 | +178 (58) |    63 to 293 |
+
+</div>
+
+![](paper_files/figure-commonmark/fig-nyc-cumulative-output-1.png)
+
+The violent crime control area is 180 blocks in Corona and Elmhurst, just south of the corridor and its buffer, including part of Flushing Meadows Corona Park (<a href="#fig-nyc-map" class="quarto-xref">Figure 5</a>). The property crime control is 122 blocks in Long Island City, 2.1 miles away; 13 blocks were excluded from every method’s pool by the single-place cap. The monthly series are more variable than Poisson (estimated dispersion 1.52 for violent and 1.70 for property crime), and the searches took 2.9 and 4.1 minutes.
+
+<a href="#fig-nyc-series" class="quarto-xref">Figure 6</a> shows why a matched control matters here. Violent crime on the corridor tripled over the matching period, from 146 complaints in its first year to 462 in the year before the operation, peaking in the summer of 2024, and its contiguous control followed the same rise month for month. Property crime surged in 2021 and 2022, and its control follows that too. Both treated series fall sharply when the operation begins. So does the violent crime control, which is a quarter mile from the corridor and may have shared in the operation’s effect, or in whatever else brought crime down that fall.
+
+<a href="#tbl-nyc" class="quarto-xref">Table 3</a> gives the estimates over the 20 months after the launch. Against its contiguous control, the WDD for violent crime is -79 (SE 50), a 13% reduction whose interval includes zero, and for property crime -308 (SE 72), a 22% reduction. Inflating the standard errors for overdispersion by $\sqrt{\phi}$ widens the violent crime interval to -201 to 43; the property crime interval, -493 to -123, still excludes zero. The Queens-wide comparison, the closest analogue of the city’s claim, gives reductions of 20% and 22%, but it fails the pre-period checks: the corridor’s crime rose much faster than the borough’s before the operation. Microsynth again stands apart, with estimated *increases* of +128 (SE 45) and +178 (SE 58); its weighted violent crime control fell 43% after the launch, against 8% for Queens as a whole.
+
+<a href="#fig-nyc-cumulative" class="quarto-xref">Figure 7</a> turns the comparison into the running tally an analyst would bring to CompStat meetings. Against the contiguous control, the property crime tally falls steadily from the first month and its interval excludes zero within a few months, ending at -308 after 20 months. The violent crime tally hovers near zero for most of the first year and only drifts down later, ending at -79, with an interval that still reaches zero. The Queens-wide comparison would have shown a steady decline in violent crime from the start.
+
+*The single-place cap.* Without the cap, the nearest passing area for property crime is a different, smaller set of 41 blocks, three of which hold 71% of its property complaints in the two years before the launch, all at chain or department stores. Complaints at one of them went from 314 in the two years before to 30 in the 20 months after, the kind of change a store closure or a change in how a store reports shoplifting produces. That control gives a WDD of -3. The map of the control area makes such a problem visible; a weight vector over thousands of blocks does not.
+
+# How much does the choice of control area matter?
+
+<div class="cell-output cell-output-display cell-output-markdown" execution_count="15">
+
+| Case      | Crime    | Rank | Violation | Distance (mi) | Area (sq mi) | Blocks |  WDD (SE) |
+|:----------|:---------|-----:|----------:|--------------:|-------------:|-------:|----------:|
+| RedBird   | Violent  |    1 |      1.00 |           0.3 |         2.38 |     73 |   -6 (11) |
+| RedBird   | Violent  |    2 |      0.95 |           1.9 |         0.90 |     19 |  +17 (10) |
+| RedBird   | Violent  |    3 |      0.98 |           1.4 |        10.19 |    162 |  +14 (10) |
+| RedBird   | Violent  |    4 |      1.00 |           2.3 |         0.92 |     46 |  +13 (11) |
+| RedBird   | Violent  |    5 |      1.00 |           1.7 |         1.05 |     55 |   +0 (11) |
+| RedBird   | Property |    1 |      0.97 |           0.6 |         2.60 |     79 |  +20 (21) |
+| RedBird   | Property |    2 |      0.99 |           1.1 |         0.72 |     41 |  +18 (20) |
+| RedBird   | Property |    3 |      0.91 |           1.1 |         1.44 |     90 |  +58 (21) |
+| RedBird   | Property |    4 |      1.00 |           2.4 |         0.78 |     44 |  +18 (20) |
+| RedBird   | Property |    5 |      0.99 |           2.7 |         0.96 |     39 |   +4 (21) |
+| Roosevelt | Violent  |    1 |      1.00 |           0.3 |         1.33 |    180 |  -79 (50) |
+| Roosevelt | Violent  |    2 |      1.00 |           0.5 |         2.58 |    259 |  +76 (48) |
+| Roosevelt | Violent  |    3 |      1.00 |           3.6 |         0.35 |     50 |  +28 (49) |
+| Roosevelt | Violent  |    4 |      0.99 |           4.0 |         0.34 |     58 |  +39 (49) |
+| Roosevelt | Property |    1 |      1.00 |           2.1 |         0.71 |    122 | -308 (72) |
+| Roosevelt | Property |    2 |      1.00 |           4.2 |         0.49 |     86 | +131 (69) |
+| Roosevelt | Property |    3 |      1.00 |           4.2 |         0.44 |     68 | +157 (68) |
+| Roosevelt | Property |    4 |      1.00 |           4.2 |         0.38 |     61 | +343 (67) |
+| Roosevelt | Property |    5 |      1.00 |           4.2 |         0.92 |     82 | +167 (69) |
+
+</div>
+
+<a href="#tbl-alt" class="quarto-xref">Table 4</a> lists the best five distinct control areas from each search. For the RedBird district they tell a consistent story: every violent crime alternative gives an estimate within two standard errors of zero, and the property crime alternatives all point to a rise, most of about 20 crimes. For Roosevelt Avenue they do not. Violent crime estimates range from -79 to +76, and property crime estimates from -308 to +343, although every one of these areas matched the corridor’s pre-period crime about as well as noise allows. The spread between statistically equivalent controls is far larger than any single estimate’s standard error.
+
+Is the Queens property crime spread just the single-place problem again? A stricter cap does not settle it. Excluding blocks with more than 10% of the corridor’s pre-period property crime (44 blocks), the best distinct areas give -220, +235, -59, and -353; at 5% (90 blocks), -286, -166, -1,422, -629, and -310. The top-ranked area gives a reduction of roughly 200 to 300 crimes under every cap, but the alternatives swing widely. Block-level property crime on commercial corridors is dominated by shoplifting at a small number of stores, and stores open, close, and change how they report; for such series an analyst would do better to analyze shoplifting separately from other property crime.
+
+The practical reading is that a single WDD estimate understates the uncertainty about the counterfactual when the treated series is as variable as it is here, and that reporting the estimate against several passing control areas is an honest and cheap check. For the RedBird district the check supports the main estimates; for Operation Restore Roosevelt it says the data do not pin down the operation’s effect, despite the large reductions a city-wide comparison suggests.
+
+# Discussion
+
+The WDD test is popular with crime analysts because it is simple: two areas, two periods, four counts. This paper keeps that simplicity on the output side, a single contiguous control area with no weights that can be put on a map and shown at a CompStat meeting next to the treated area, and moves the work of choosing it into a search that is fast enough to run on a desktop computer in a few minutes. The control area is chosen the way a synthetic control is, by tracking the treated area’s crime month by month before the intervention, so the plot of the two series looks like a synthetic control plot, and the running WDD after the intervention reads directly as crimes prevented so far.
+
+Three lessons from building it are worth stating for anyone matching small areas on pre-period crime, with this method or another.
+
+First, do not ask for the best possible pre-period fit. With thousands of candidate areas, or thousands of donor weights, the best fit reproduces the treated area’s noise, and the simulations show it estimates the effect worse than a control that is merely as close as noise allows. Microsynth’s exact calibration has the same problem in a different form: its weights reproduce every month of the treated series exactly, noise included. Judging the match against noise (Poisson, scaled up for overdispersion), at more than one time scale and for the level and trend, gives a control that tracks the treated area without chasing its noise.
+
+Second, a matched control earns its keep when the treated area does not share its surroundings’ trend. When neighborhoods share trends, a ring around the buffer works as well or better, and is simpler. But interventions are placed where crime has been rising, and then the ring and the city-wide trend are badly biased, while the matched area cuts the bias roughly in half. The analyst does not know in advance which world they are in, and the pre-period plot of the treated area against a ring is the way to find out.
+
+Third, look at the control area. The Queens property crime example shows how a control dominated by one place can be wrecked by a change at that place, and a map of the selected blocks makes the problem easy to see in a way a weight vector over thousands of blocks does not. Capping any single block’s share of the control’s crime is a design-stage rule that avoids the worst of this without looking at the post-period.
+
+The method has limitations. The WDD’s Poisson standard error ignores overdispersion (unless inflated by $\sqrt{\phi}$) and the uncertainty that comes from choosing among many candidate areas, and in the simulations the WDD intervals cover the true effect less often than their nominal 95% for every control, the contiguous one included. Different passing areas also give noticeably different estimates, as the alternatives in <a href="#tbl-alt" class="quarto-xref">Table 4</a> show. Inflating the standard error, averaging the WDD over several distinct passing areas, or calibrating intervals with placebo areas run through the same search are natural next steps. The closer-neighbor constraint restricts areas to be star-shaped around their centers, which excludes some connected shapes; the scan over centers and the integer program’s freedom within each window make this a mild restriction in practice, and it is what keeps each window’s program small. The control is matched only on crime counts. Covariates such as population or land use can be added as more balance constraints of the same linear form. Finally, the method takes the treated area and the intervention date as given; it does not address an intervention placed in response to a short-term spike, where any pre-period match inherits the spike.
+
+The code is a small Python package (`wddcontrol`) that takes a matrix of pre-period counts, the treated area’s series, an adjacency matrix, and a mask of eligible units, and returns the control area and its alternatives. It works with any small units, census blocks, grid cells, or street segments, and any period length.
+
+# AI use disclosure
+
+The code, analysis, and paper text were produced with Claude Code (Anthropic) under my direction. I specified the research question, the approach (a scan over the study region with an integer program inside each window, matched on pre-period monthly trends), the WDD framing, the comparison with microsynth, the running CompStat-style WDD, the use of synthetic data, and the two case studies. All numeric results and figures are computed from the data and scripts in the repository.
+
+# References
+
+<div id="refs" class="references csl-bib-body hanging-indent" entry-spacing="0">
+
+<div id="ref-abadie2021" class="csl-entry">
+
+Abadie, Alberto. 2021. “Using Synthetic Controls: Feasibility, Data Requirements, and Methodological Aspects.” *Journal of Economic Literature* 59 (2): 391–425. <https://doi.org/10.1257/jel.20191450>.
+
+</div>
+
+<div id="ref-abadie2010" class="csl-entry">
+
+Abadie, Alberto, Alexis Diamond, and Jens Hainmueller. 2010. “Synthetic Control Methods for Comparative Case Studies: Estimating the Effect of <span class="nocase">California’s</span> Tobacco Control Program.” *Journal of the American Statistical Association* 105 (490): 493–505. <https://doi.org/10.1198/jasa.2009.ap08746>.
+
+</div>
+
+<div id="ref-abadie2003" class="csl-entry">
+
+Abadie, Alberto, and Javier Gardeazabal. 2003. “The Economic Costs of Conflict: A Case Study of the Basque Country.” *American Economic Review* 93 (1): 113–32. <https://doi.org/10.1257/000282803321455188>.
+
+</div>
+
+<div id="ref-bowers2003" class="csl-entry">
+
+Bowers, Kate J., and Shane D. Johnson. 2003. “Measuring the Geographical Displacement and Diffusion of Benefit Effects of Crime Prevention Activity.” *Journal of Quantitative Criminology* 19 (3): 275–301. <https://doi.org/10.1023/A:1024909009240>.
+
+</div>
+
+<div id="ref-dallas2025pid" class="csl-entry">
+
+City of Dallas. 2025. “Resolution Authorizing Creation of the RedBird Public Improvement District (File 25-1154A).” <https://cityofdallas.legistar.com/LegislationDetail.aspx?ID=7294042&GUID=A7181220-17E1-4EA3-9523-94E2EB9EB965>.
+
+</div>
+
+<div id="ref-cook2011" class="csl-entry">
+
+Cook, Philip J., and John MacDonald. 2011. “Public Safety Through Private Action: An Economic Assessment of BIDs.” *The Economic Journal* 121 (552): 445–62. <https://doi.org/10.1111/j.1468-0297.2011.02420.x>.
+
+</div>
+
+<div id="ref-deville1992" class="csl-entry">
+
+Deville, Jean-Claude, and Carl-Erik Särndal. 1992. “Calibration Estimators in Survey Sampling.” *Journal of the American Statistical Association* 87 (418): 376–82. <https://doi.org/10.1080/01621459.1992.10475217>.
+
+</div>
+
+<div id="ref-guerette2009" class="csl-entry">
+
+Guerette, Rob T., and Kate J. Bowers. 2009. “Assessing the Extent of Crime Displacement and Diffusion of Benefits: A Review of Situational Crime Prevention Evaluations.” *Criminology* 47 (4): 1331–68. <https://doi.org/10.1111/j.1745-9125.2009.00177.x>.
+
+</div>
+
+<div id="ref-huangfu2018" class="csl-entry">
+
+Huangfu, Qi, and J. A. Julian Hall. 2018. “Parallelizing the Dual Revised Simplex Method.” *Mathematical Programming Computation* 10 (1): 119–42. <https://doi.org/10.1007/s12532-017-0130-5>.
+
+</div>
+
+<div id="ref-kulldorff1997" class="csl-entry">
+
+Kulldorff, Martin. 1997. “A Spatial Scan Statistic.” *Communications in Statistics – Theory and Methods* 26 (6): 1481–96. <https://doi.org/10.1080/03610929708831995>.
+
+</div>
+
+<div id="ref-macdonald2010" class="csl-entry">
+
+MacDonald, John, Daniela Golinelli, Robert J. Stokes, and Ricky Bluthenthal. 2010. “The Effect of Business Improvement Districts on the Incidence of Violent Crimes.” *Injury Prevention* 16 (5): 327–32. <https://doi.org/10.1136/ip.2009.024943>.
+
+</div>
+
+<div id="ref-qns2025" class="csl-entry">
+
+QNS. 2025. “Mayor Adams Shares 90-Day Progress of Operation Restore Roosevelt.” <https://qns.com/2025/01/mayor-adams-90-day-operation-restore-roosevelt/>.
+
+</div>
+
+<div id="ref-queenseagle2024" class="csl-entry">
+
+Queens Daily Eagle. 2024. “Mayor Launches Controversial Crackdown on Roosevelt Ave.” <https://queenseagle.com/all/2024/10/17/mayor-launches-controversial-crackdown-on-roosevelt-ave>.
+
+</div>
+
+<div id="ref-robbins2021" class="csl-entry">
+
+Robbins, Michael W., and Steven Davenport. 2021. “Microsynth: Synthetic Control Methods for Disaggregated and Micro-Level Data in R.” *Journal of Statistical Software* 97 (2): 1–31. <https://doi.org/10.18637/jss.v097.i02>.
+
+</div>
+
+<div id="ref-robbins2017" class="csl-entry">
+
+Robbins, Michael W., Jessica Saunders, and Beau Kilmer. 2017. “A Framework for Synthetic Control Methods with High-Dimensional, Micro-Level Data: Evaluating a Neighborhood-Specific Crime Intervention.” *Journal of the American Statistical Association* 112 (517): 109–26. <https://doi.org/10.1080/01621459.2016.1213634>.
+
+</div>
+
+<div id="ref-saunders2015" class="csl-entry">
+
+Saunders, Jessica, Russell Lundberg, Anthony A. Braga, Greg Ridgeway, and Jeremy Miles. 2015. “A Synthetic Control Approach to Evaluating Place-Based Crime Interventions.” *Journal of Quantitative Criminology* 31 (3): 413–34. <https://doi.org/10.1007/s10940-014-9226-5>.
+
+</div>
+
+<div id="ref-shirabe2005" class="csl-entry">
+
+Shirabe, Takeshi. 2005. “A Model of Contiguity for Spatial Unit Allocation.” *Geographical Analysis* 37 (1): 2–16. <https://doi.org/10.1111/j.1538-4632.2005.00605.x>.
+
+</div>
+
+<div id="ref-tango2005" class="csl-entry">
+
+Tango, Toshiro, and Kunihiko Takahashi. 2005. “A Flexibly Shaped Spatial Scan Statistic for Detecting Clusters.” *International Journal of Health Geographics* 4: 11. <https://doi.org/10.1186/1476-072X-4-11>.
+
+</div>
+
+<div id="ref-labreport2026" class="csl-entry">
+
+The LAB Report Dallas. 2026. “Red Bird, Oak Cliff Redevelopment.” <https://labreportdallas.com/neighborhoods/red-bird-oak-cliff-redevelopment/>.
+
+</div>
+
+<div id="ref-validi2022" class="csl-entry">
+
+Validi, Hamidreza, Austin Buchanan, and Eugene Lykhovyd. 2022. “Imposing Contiguity Constraints in Political Districting Models.” *Operations Research* 70 (2): 867–92. <https://doi.org/10.1287/opre.2021.2141>.
+
+</div>
+
+<div id="ref-wheeler2019pmed" class="csl-entry">
+
+Wheeler, Andrew P. 2019. “Creating Optimal Patrol Areas Using the p-Median Model.” *Policing: An International Journal* 42 (3): 318–33. <https://doi.org/10.1108/PIJPSM-02-2018-0027>.
+
+</div>
+
+<div id="ref-wheeler2024compstat" class="csl-entry">
+
+———. 2024. “CompStat and Counterfactuals.” CRIME De-Coder blog, <https://crimede-coder.com/blogposts/2024/CompstatCounter>.
+
+</div>
+
+<div id="ref-wheeler2018wdd" class="csl-entry">
+
+Wheeler, Andrew P., and Jerry H. Ratcliffe. 2018. “A Simple Weighted Displacement Difference Test to Evaluate Place Based Crime Interventions.” *Crime Science* 7 (1): 11. <https://doi.org/10.1186/s40163-018-0085-5>.
+
+</div>
+
+</div>

@@ -1,0 +1,36 @@
+[project]
+name = "wddcontrol"
+version = "0.1.0"
+description = "Contiguous control areas for the weighted displacement difference test"
+readme = "README.md"
+authors = [
+    { name = "apwheele", email = "apwheele@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "cvxpy>=1.9.3",
+    "geopandas>=1.2.0",
+    "highspy>=1.15.1",
+    "matplotlib>=3.11.2",
+    "networkx>=3.7",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "pulp>=4.0.0",
+    "pygris>=0.2.1",
+    "pyproj>=3.8.0",
+    "requests>=2.34.2",
+    "scipy>=1.18.1",
+    "shapely>=2.1.2",
+    "tabulate>=0.10.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "jupyter>=1.1.1",
+    "pytest>=9.1.1",
+]

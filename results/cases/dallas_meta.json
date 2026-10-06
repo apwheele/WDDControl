@@ -1,0 +1,70 @@
+{
+  "name": "dallas",
+  "start": "2026-01-01",
+  "months": 1,
+  "n_pre": 84,
+  "n_post": 9,
+  "n_units": 18946,
+  "n_candidates": 17396,
+  "n_treated_units": 24,
+  "buffer_ft": 1320.0,
+  "ring_ft": [
+    1320.0,
+    2640.0
+  ],
+  "objective": "near",
+  "types": {
+    "violent": {
+      "tau": 174.1465281103133,
+      "level_thr": 24.73863375370596,
+      "slope_thr": 592.7267498603383,
+      "phi": 1.0,
+      "seconds": 155.5459121999993,
+      "seconds_fit": 31.256714200000715,
+      "search_seconds": {
+        "screen": 19.246341799997026,
+        "ilp": 136.29678820000117,
+        "total": 155.5431299999982
+      },
+      "n_windows": 4600,
+      "n_feasible_ilp": 50,
+      "n_ilp": 50,
+      "ilp_status": {
+        "Time limit reached": 25,
+        "Optimal": 25
+      },
+      "microsynth_exact": true,
+      "microsynth_intercept": true,
+      "T0": 29,
+      "T1": 35,
+      "n_capped": 9,
+      "n_candidates": 17387
+    },
+    "property": {
+      "tau": 445.3682281099834,
+      "level_thr": 61.90336241284061,
+      "slope_thr": 1468.8505251231668,
+      "phi": 1.4119477811405627,
+      "seconds": 232.0342062999989,
+      "seconds_fit": 50.62929249999797,
+      "search_seconds": {
+        "screen": 53.00695079999787,
+        "ilp": 179.02456900000107,
+        "total": 232.03151979999893
+      },
+      "n_windows": 7365,
+      "n_feasible_ilp": 50,
+      "n_ilp": 50,
+      "ilp_status": {
+        "Time limit reached": 47,
+        "Optimal": 3
+      },
+      "microsynth_exact": true,
+      "microsynth_intercept": false,
+      "T0": 103,
+      "T1": 118,
+      "n_capped": 103,
+      "n_candidates": 17293
+    }
+  }
+}

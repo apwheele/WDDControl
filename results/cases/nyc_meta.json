@@ -1,0 +1,69 @@
+{
+  "name": "nyc",
+  "start": "2024-10-15",
+  "months": 1,
+  "n_pre": 72,
+  "n_post": 20,
+  "n_units": 13926,
+  "n_candidates": 13595,
+  "n_treated_units": 40,
+  "buffer_ft": 1320.0,
+  "ring_ft": [
+    1320.0,
+    2640.0
+  ],
+  "objective": "near",
+  "types": {
+    "violent": {
+      "tau": 448.833148151208,
+      "level_thr": 68.73052863019626,
+      "slope_thr": 1509.0029908651402,
+      "phi": 1.5208903946510717,
+      "seconds": 175.80322330000126,
+      "seconds_fit": 39.78954239999803,
+      "search_seconds": {
+        "screen": 29.256134199997177,
+        "ilp": 146.54424120000112,
+        "total": 175.8003753999983
+      },
+      "n_windows": 3204,
+      "n_feasible_ilp": 50,
+      "n_ilp": 50,
+      "ilp_status": {
+        "Optimal": 33,
+        "Time limit reached": 17
+      },
+      "microsynth_exact": true,
+      "microsynth_intercept": false,
+      "T0": 718,
+      "T1": 540,
+      "n_capped": 0,
+      "n_candidates": 13595
+    },
+    "property": {
+      "tau": 741.3685652719471,
+      "level_thr": 112.9131349601588,
+      "slope_thr": 2285.8152808874556,
+      "phi": 1.6976532685127879,
+      "seconds": 246.5648242999996,
+      "seconds_fit": 55.89869579999868,
+      "search_seconds": {
+        "screen": 65.58003000000099,
+        "ilp": 180.9815935000006,
+        "total": 246.5616235000016
+      },
+      "n_windows": 3626,
+      "n_feasible_ilp": 19,
+      "n_ilp": 50,
+      "ilp_status": {
+        "Time limit reached": 50
+      },
+      "microsynth_exact": true,
+      "microsynth_intercept": false,
+      "T0": 1423,
+      "T1": 1073,
+      "n_capped": 13,
+      "n_candidates": 13582
+    }
+  }
+}
