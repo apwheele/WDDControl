@@ -931,8 +931,10 @@ months after the launch, through June 14, 2026, with the 20 months before.
 
 ```{python}
 #| label: fig-nyc-map
-#| fig-cap: "Roosevelt Avenue from 74th to 111th Street (black), its quarter-mile buffer (dashed), and the control areas for violent and property crime: the contiguous control (blue fill) and the pure scan's network circle (aqua outline). Gray lines are census blocks."
-fig, axes = plt.subplots(2, 1, figsize=(7.5, 7.6))
+#| fig-cap: "Roosevelt Avenue from 74th to 111th Street (black), its quarter-mile buffer (dashed), and the control areas for violent and property crime: the contiguous control (blue fill) and the pure scan's network circle (aqua outline). Gray lines are census blocks. The right panel shows microsynth's weights for violent crime across all of Queens (darker is larger)."
+fig = plt.figure(figsize=(7.5, 6.6))
+gs = fig.add_gridspec(2, 2, width_ratios=[1.25, 1])
+axes = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[1, 0])]
 sels = {ct: sel_idx("nyc", nyc, ct) for ct in CRIMES}
 scans = {ct: sel_idx("nyc", nyc, ct, "scan") for ct in CRIMES}
 for ax, ct in zip(axes, CRIMES):
@@ -943,10 +945,15 @@ for ax, ct in zip(axes, CRIMES):
     plots.case_map(ax, units["nyc"], nyc["areas"], {"c": (sels[ct], plots.BLUE)}, extent=ext,
                    title=f"{CTYPE_NAME[ct]} crime", outlines={"s": (scans[ct], plots.AQUA)})
     plots.scale_bar(ax)
+ax_ms = fig.add_subplot(gs[:, 1])
+ms = nyc["violent"]["ms"]
+plots.case_map(ax_ms, units["nyc"], nyc["areas"], {}, extent=tuple(units["nyc"].total_bounds),
+               weights=(g2i["nyc"][ms["GEOID20"]].to_numpy(), ms["weight"].to_numpy()), title="Microsynth weights")
+plots.scale_bar(ax_ms, length_ft=5 * 5280, label="5 miles", loc=(0.58, 0.03))
 fig.legend(handles=plots.legend_handles([("Roosevelt Ave, 74th to 111th St", plots.INK, "patch"),
                                          ("Quarter-mile buffer", plots.INK, "outline"),
                                          ("Contiguous control", plots.BLUE, "patch"), ("Scan", plots.AQUA, "edge")]),
-           loc="lower center", ncol=4, frameon=False)
+           loc="lower center", ncol=4, frameon=False, fontsize=8)
 plt.tight_layout(rect=(0, 0.04, 1, 1))
 plt.show()
 ```
@@ -997,7 +1004,12 @@ Ozone Park and Richmond Hill in southern Queens,
 `{python} f"{W(nyc, 'property', 'contiguous', 'dist_mi'):.1f}"` miles away;
 `{python} num(T(nyc, "property", "n_capped"))` blocks were excluded from
 every method's pool by the single-place cap. The scan's network circles are
-larger and, for property crime, in a different part of the borough. The
+larger and, for property crime, in a different part of the borough.
+Microsynth again spreads its weight across the whole borough, over
+`{python} num(W(nyc, "violent", "microsynth", "n_units"))` of the
+`{python} num(W(nyc, "violent", "city", "n_units"))` candidate blocks for
+violent crime and `{python} num(W(nyc, "property", "microsynth", "n_units"))`
+of `{python} num(W(nyc, "property", "city", "n_units"))` for property crime. The
 monthly series are more variable than Poisson (estimated dispersion
 `{python} f"{T(nyc, 'violent', 'phi'):.2f}"` for violent and
 `{python} f"{T(nyc, 'property', 'phi'):.2f}"` for property crime), and the
